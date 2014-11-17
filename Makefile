@@ -8,7 +8,7 @@ GTEST_HEADERS = $(GTEST_DIR)/include/gtest/*.h \
                 $(GTEST_DIR)/include/gtest/internal/*.h
 GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/src/*.h $(GTEST_HEADERS)
 
-SRCS=flows.cc
+SRCS=flows.cc packer.cc common.cc
 OBJS=$(subst .cc,.o,$(SRCS))
 RM=rm -f
 
@@ -22,7 +22,7 @@ gtest_main.o : $(GTEST_SRCS_)
 
 common.o: common.cc common.h
 
-packer.o: packer.cc packer.h
+packer.o: packer.cc packer.h common.o
 
 flows.o: flows.cc flows.h common.o
 
