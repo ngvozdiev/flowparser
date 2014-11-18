@@ -74,7 +74,6 @@ TEST_F(PackerFixture, Append1KSame) {
 
 TEST_F(PackerFixture, Append10M) {
   std::default_random_engine e(1);
-
   std::vector<uint64_t> model;
 
   uint64_t prev = 0;
@@ -87,6 +86,27 @@ TEST_F(PackerFixture, Append10M) {
   }
 
   seq_.Restore(&vec_);
+  ASSERT_EQ(model, vec_);
+}
+
+TEST_F(PackerFixture, Append1MIter) {
+  std::default_random_engine e(2);
+  std::vector<uint64_t> model;
+
+  uint64_t prev = 0;
+  for (uint64_t i = 0; i < 1000000L; ++i) {
+    uint64_t val = prev + e();
+    prev = val;
+
+    ASSERT_TRUE(seq_.Append(val).ok());
+    model.push_back(val);
+  }
+
+  auto it = PackedUintSeqIterator(seq_);
+  while (it.HasNext()) {
+    vec_.push_back(it.Next());
+  }
+
   ASSERT_EQ(model, vec_);
 }
 
@@ -118,6 +138,21 @@ TEST_F(RLEFixture, Append1M) {
   // Regardless of the implementation if RLE is implemented correctly the 10M
   // values should fit in 50 bytes.
   ASSERT_GT(50, seq_.SizeBytes());
+
+  seq_.Restore(&vec_);
+  ASSERT_EQ(model, vec_);
+}
+
+TEST_F(RLEFixture, Append10M) {
+  std::default_random_engine e(1);
+
+  std::vector<uint64_t> model;
+  for (size_t i = 0; i < 10000000; i++) {
+    uint64_t val = e();
+
+    seq_.Append(val);
+    model.push_back(val);
+  }
 
   seq_.Restore(&vec_);
   ASSERT_EQ(model, vec_);
