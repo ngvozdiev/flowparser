@@ -102,9 +102,10 @@ TEST_F(PackerFixture, Append1MIter) {
     model.push_back(val);
   }
 
-  auto it = PackedUintSeqIterator(seq_);
-  while (it.HasNext()) {
-    vec_.push_back(it.Next());
+  PackedUintSeqIterator it(seq_);
+  uint64_t value;
+  while (it.Next(&value)) {
+    vec_.push_back(value);
   }
 
   ASSERT_EQ(model, vec_);
@@ -155,6 +156,26 @@ TEST_F(RLEFixture, Append10M) {
   }
 
   seq_.Restore(&vec_);
+  ASSERT_EQ(model, vec_);
+}
+
+TEST_F(RLEFixture, Append1MIter) {
+  std::default_random_engine e(2);
+
+  std::vector<uint64_t> model;
+  for (size_t i = 0; i < 1000000; i++) {
+    uint64_t val = e();
+
+    seq_.Append(val);
+    model.push_back(val);
+  }
+
+  RLEFieldIterator<uint64_t> it(seq_);
+  uint64_t value;
+  while (it.Next(&value)) {
+    vec_.push_back(value);
+  }
+
   ASSERT_EQ(model, vec_);
 }
 

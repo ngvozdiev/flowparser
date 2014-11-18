@@ -77,26 +77,27 @@ class PackedUintSeq {
 // during iteration, results are undefined otherwise.
 class PackedUintSeqIterator {
  public:
-  PackedUintSeqIterator(const PackedUintSeq& parent)
+  explicit PackedUintSeqIterator(const PackedUintSeq& parent)
       : parent_(parent),
         next_offset_(0),
         prev_value_(0),
         element_count_(0) {
   }
 
-  // Returns true if there are more elements in the iterator.
-  bool HasNext() {
-    return element_count_ < parent_.len_;
-  }
-
   // Fetches the next element in the iterator.
-  uint64_t Next() {
+  bool Next(uint64_t* value) {
+    if (element_count_ >= parent_.len_) {
+      return false;
+    }
+
     uint64_t diff;
     next_offset_ += parent_.DeflateSingleInteger(next_offset_, &diff);
     prev_value_ += diff;
 
     ++element_count_;
-    return prev_value_;
+    *value = prev_value_;
+
+    return true;
   }
 
  private:
@@ -116,6 +117,9 @@ class PackedUintSeqIterator {
   DISALLOW_COPY_AND_ASSIGN(PackedUintSeqIterator);
 };
 
+template<typename T>
+class RLEFieldIterator;
+
 // Compresses and decompresses a sequence of elements to a series of sequences
 // (X1, X1 + t1, X1 + 2t1, X1 + 3t1 ...), (X2, X2 + t2, X2 + 2t2, X2 + 3t2 ...),
 // ... When a new element is inserted it is first checked if it is part of the
@@ -126,7 +130,7 @@ class RLEField {
   // A stride is a sequence X, X + t, X + 2t, X + 3t ...
   class Stride {
    private:
-    Stride(T value)
+    explicit Stride(T value)
         : value_(value),
           increment_(0),
           len_(0) {
@@ -136,7 +140,8 @@ class RLEField {
     T increment_;  // The increment (t).
     size_t len_;  // How many elements there are in the sequence.
 
-    friend class RLEField<T> ;
+    friend class RLEField<T>;
+    friend class RLEFieldIterator<T>;
   };
 
  public:
@@ -188,7 +193,9 @@ class RLEField {
   // The entire sequence is stored as a sequence of strides.
   std::vector<Stride> strides_;
 
-  friend class RLEFieldIterator<T> ;DISALLOW_COPY_AND_ASSIGN(RLEField<T>);
+  friend class RLEFieldIterator<T>;
+
+  DISALLOW_COPY_AND_ASSIGN(RLEField<T>);
 };
 
 // An iterator over an RLEField. The parent sequence MUST not be modified
@@ -196,46 +203,38 @@ class RLEField {
 template<typename T>
 class RLEFieldIterator {
  public:
-  RLEFieldIterator(const RLEField<T>& parent)
+  explicit RLEFieldIterator(const RLEField<T>& parent)
       : parent_(parent),
+        curr_stride_(nullptr),
         stride_index_(0),
-        stride_len_(0),
         index_in_stride_(0) {
   }
 
-  bool HasNext() {
-    return stride_index_ < parent_.strides_.size()
-        || index_in_stride_ < stride_len_;
-  }
+  bool Next(T* value) {
+    if (curr_stride_ == nullptr || index_in_stride_ > curr_stride_->len_) {
+      if (stride_index_ == parent_.strides_.size()) {
+        return false;
+      }
 
-  T Next() {
-    if (index_in_stride_ > stride_len_) {
-      stride_index_++;
+      curr_stride_ = &parent_.strides_[stride_index_++];
+      index_in_stride_ = 0;
     }
 
-    const RLEField<T>::Stride& stride = parent_.strides_[stride_index_];
+    *value = curr_stride_->value_ +
+        static_cast<T>(index_in_stride_++) * curr_stride_->increment_;
 
-    if (index_in_stride_ == 0) {
-      index_in_stride_++;
-      return stride.value_;
-    }
-
-    uint64_t return_value = stride.value_
-        + (index_in_stride_) * stride.increment_;
-
-    index_in_stride_++;
-    return return_value;
+    return true;
   }
 
  private:
   // The parent sequence.
   const RLEField<T>& parent_;
 
+  // The most current stride.
+  const typename RLEField<T>::Stride* curr_stride_;
+
   // Index that points to the next stride.
   size_t stride_index_;
-
-  // Length of current stride.
-  size_t stride_len_;
 
   // Index within the stride.
   size_t index_in_stride_;
