@@ -96,20 +96,14 @@ class FlowParser {
 
  private:
   struct TCPValue {
+    std::mutex mu; // A mutex to protect the flow.
+
     uint64_t timeout_time; // When this flow is due to timeout.
 
     // The value object owns the flow. Later on in the life of the flow
     // ownership is transferred to the collection queue.
     std::unique_ptr<TCPFlow> flow;
-
-    // Each TCPValue is chained to other TCPValues in the time_list_ variable of
-    // FlowParser.
-    std::list<TCPValue*>::const_iterator position_in_time_list;
   };
-
-  void MoveTCPValueToFrontOfTimeList(TCPValue* value) {
-    time_list_.erase(value->position_in_time_list);
-  }
 
   // How long to wait before collecting flows. This is not in real time, but in
   // time measured as per pcap timestamps. This means that "time" has whatever
@@ -128,11 +122,6 @@ class FlowParser {
 
   // Last time a packet was received.
   uint64_t last_rx_;
-
-  // Every time a new packet is received the flow it belongs to is moved to the
-  // front of the time_list. This results in all flows which have not received
-  // packets being at the back of the list. When a new packet is received also the
-  std::list<TCPValue*> time_list_;
 
   // A map to store TCP flows.
   std::unordered_map<FlowKey, TCPValue, KeyHasher> flows_;
