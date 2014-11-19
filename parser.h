@@ -95,10 +95,22 @@ class FlowParser {
                    const pcap::SniffTcp& transport_header, uint64_t timestamp);
 
   // Times out flows that have expired.
-  void CollectFlows();
+  void CollectFlows() {
+    PrivateCollectFlows([](int64_t time_left) {return time_left < 0;});
+  }
+
+  // Times out all flow regardless of how close they are to expiring.
+  void CollectAllFlows() {
+    PrivateCollectFlows([](int64_t time_left) {return true;});
+  }
 
  private:
   typedef std::pair<std::mutex, std::unique_ptr<TCPFlow>> FlowValue;
+
+  // Performs a collection. Each flow is considered for collection based on an
+  // evaluation function that is given the remaining amount of time that the
+  // flow has until it expires.
+  void PrivateCollectFlows(std::function<bool(int64_t)> eval_for_collection);
 
   // How long to wait before collecting flows. This is not in real time, but in
   // time measured as per pcap timestamps. This means that "time" has whatever
@@ -120,7 +132,6 @@ class FlowParser {
 
   DISALLOW_COPY_AND_ASSIGN(FlowParser);
 };
-
 }
 
 #endif  /* FLOWPARSER_PARSER_H */

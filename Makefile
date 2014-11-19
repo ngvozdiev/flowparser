@@ -31,7 +31,7 @@ flows.o: flows.cc flows.h common.o packer.o
 parser.o: parser.cc parser.h flows.o
 
 # Tests
-flows_test.o: flows_test.cc flows.o
+flows_test.o: flows_test.cc common_test.h flows.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c flows_test.cc
 
 flows_test: flows_test.o gtest_main.o gtest-all.o $(OBJS)
@@ -43,7 +43,7 @@ packer_test.o: packer_test.cc packer.o
 packer_test: packer_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
 
-parser_test.o: parser_test.cc parser.o
+parser_test.o: parser_test.cc common_test.h parser.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c parser_test.cc
 
 parser_test: parser_test.o gtest_main.o gtest-all.o $(OBJS)

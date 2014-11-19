@@ -36,7 +36,8 @@ Status FlowParser::HandlePkt(const pcap::SniffIp& ip_header,
   return Status::kStatusOK;
 }
 
-void FlowParser::CollectFlows() {
+void FlowParser::PrivateCollectFlows(
+    std::function<bool(int64_t)> eval_for_collection) {
   std::vector<std::unique_ptr<TCPFlow>> flows_to_collect;
 
   // Lock the table mutex
@@ -55,7 +56,7 @@ void FlowParser::CollectFlows() {
         flow->UpdateAverages();
 
         int64_t time_left = flow->TimeLeft(last_rx_);
-        if (time_left < 0) {
+        if (eval_for_collection(time_left)) {
           flow->Deactivate();
           flows_to_collect.push_back(std::move(flow));
 
