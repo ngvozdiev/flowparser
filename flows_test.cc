@@ -79,9 +79,10 @@ static void AssertTCPHeadersEqual(const pcap::SniffTcp& pcap_header,
 }
 
 constexpr uint64_t kInitTimestamp = 10000;
+constexpr uint64_t kDefaultTimeout = 1000;
 
 TEST(Flows, InfoInit) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
 
   auto info = tcp_flow.GetInfo();
 
@@ -94,7 +95,7 @@ TEST(Flows, InfoInit) {
 }
 
 TEST(Flows, InfoAvgNoPkts) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
 
   for (size_t i = 0; i < 100; ++i) {
     tcp_flow.UpdateAverages();
@@ -107,7 +108,7 @@ TEST(Flows, InfoAvgNoPkts) {
 }
 
 TEST(Flows, InfoAvgFivePkts) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
   TCPPktGen gen(1);
 
   for (size_t i = 0; i < 100; ++i) {
@@ -130,7 +131,7 @@ TEST(Flows, InfoAvgFivePkts) {
 }
 
 TEST(Flows, InfoAvgDecay) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
   TCPPktGen gen(1);
 
   for (size_t j = 0; j < 5; ++j) {
@@ -153,7 +154,7 @@ TEST(Flows, InfoAvgDecay) {
 }
 
 TEST(Flows, InfoTotals) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
   TCPPktGen gen(1);
 
   uint64_t size_total = 0;
@@ -174,7 +175,7 @@ TEST(Flows, InfoTotals) {
 }
 
 TEST(Flows, InfoFirstLastRx) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
   TCPPktGen gen(1);
 
   for (size_t i = 0; i < 100; ++i) {
@@ -190,8 +191,37 @@ TEST(Flows, InfoFirstLastRx) {
   ASSERT_EQ(kInitTimestamp + 5 * 99, info.last_rx);
 }
 
+// If the flow is only initialized, but has no packets it should be expired.
+TEST(Flows, TimeLeftInit) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+
+  ASSERT_GT(0, tcp_flow.TimeLeft(kInitTimestamp));
+  ASSERT_GT(0, tcp_flow.TimeLeft(kInitTimestamp + kDefaultTimeout));
+}
+
+TEST(Flows, TimeLeft) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+  TCPPktGen gen(1);
+
+  tcp_flow.PacketRx(gen.GenerateIpHeader(), gen.GenerateTCPHeader(),
+                    kInitTimestamp);
+
+  ASSERT_EQ(kDefaultTimeout, tcp_flow.TimeLeft(kInitTimestamp));
+  ASSERT_EQ(0, tcp_flow.TimeLeft(kInitTimestamp + kDefaultTimeout));
+}
+
+TEST(Flows, TimeLeftNegative) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+  TCPPktGen gen(1);
+
+  tcp_flow.PacketRx(gen.GenerateIpHeader(), gen.GenerateTCPHeader(),
+                    kInitTimestamp);
+
+  ASSERT_GT(0, tcp_flow.TimeLeft(kInitTimestamp + kDefaultTimeout + 1));
+}
+
 TEST(Flows, 1MIter) {
-  TCPFlow tcp_flow(kInitTimestamp);
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
   TCPPktGen gen(1);
 
   std::vector<pcap::SniffIp> ip_headers;

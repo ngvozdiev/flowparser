@@ -62,9 +62,20 @@ class Flow {
   // function will produce per-period averages. This function is thread-safe.
   void UpdateAverages();
 
+  void Deactivate() {
+    state_ = FlowState::PASSIVE;
+  }
+
+  // Returns the time remaining until this flow expires (if the returned value
+  // is negative this flow has expired).
+  int64_t TimeLeft(uint64_t time_now) const {
+    return (last_rx_time_ + timeout_) - time_now;
+  }
+
  protected:
-  explicit Flow(uint64_t timestamp)
+  Flow(uint64_t timestamp, uint64_t timeout)
       : first_rx_time_(timestamp),
+        timeout_(timeout),
         state_(FlowState::ACTIVE) {
   }
 
@@ -78,6 +89,9 @@ class Flow {
  private:
   // Timestamp of the first packet reception.
   const uint64_t first_rx_time_;
+
+  // How long after the last rx packet the flow should be considered timed out.
+  const uint64_t timeout_;
 
   // The current state of this flow. This variable should be updated atomically.
   FlowState state_;
@@ -166,8 +180,8 @@ class FlowIterator {
 
 class UDPFlow : public Flow {
  public:
-  UDPFlow(uint64_t init_timestamp)
-      : Flow::Flow(init_timestamp) {
+  UDPFlow(uint64_t init_timestamp, uint64_t timeout)
+      : Flow::Flow(init_timestamp, timeout) {
   }
 
   size_t SizeBytes() {
@@ -181,8 +195,8 @@ class UDPFlow : public Flow {
 
 class TCPFlow : public Flow {
  public:
-  TCPFlow(uint64_t init_timestamp)
-      : Flow::Flow(init_timestamp) {
+  TCPFlow(uint64_t init_timestamp, uint64_t timeout)
+      : Flow::Flow(init_timestamp, timeout) {
   }
 
   size_t SizeBytes() {

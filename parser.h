@@ -83,8 +83,11 @@ struct KeyHasher {
 // flow instances.
 class FlowParser {
  public:
-  FlowParser(std::function<void(std::unique_ptr<TCPFlow>)> callback)
-      : callback_(callback) {
+  FlowParser(std::function<void(std::unique_ptr<TCPFlow>)> callback,
+             uint64_t timeout)
+      : flow_timeout_(timeout),
+        last_rx_(std::numeric_limits<uint64_t>::max()),
+        callback_(callback) {
   }
 
   // Called when a new TCP packet arrives.
@@ -95,15 +98,7 @@ class FlowParser {
   void CollectFlows();
 
  private:
-  struct TCPValue {
-    std::mutex mu; // A mutex to protect the flow.
-
-    uint64_t timeout_time; // When this flow is due to timeout.
-
-    // The value object owns the flow. Later on in the life of the flow
-    // ownership is transferred to the collection queue.
-    std::unique_ptr<TCPFlow> flow;
-  };
+  typedef std::pair<std::mutex, std::unique_ptr<TCPFlow>> FlowValue;
 
   // How long to wait before collecting flows. This is not in real time, but in
   // time measured as per pcap timestamps. This means that "time" has whatever
@@ -111,20 +106,14 @@ class FlowParser {
   // when packets are received.
   const uint64_t flow_timeout_;
 
-  // The collection queue is where flows which have timed out reside. A
-  // collector thread offloads them to the client of the class by calling the
-  // callback provided upon construction.
-  std::vector<std::unique_ptr<TCPFlow>> collection_queue_;
-
-  // Since there is a separate thread doing collection we need a way to protect
-  // the collection queue.
-  std::mutex collection_queue_mutex_;
-
   // Last time a packet was received.
   uint64_t last_rx_;
 
   // A map to store TCP flows.
-  std::unordered_map<FlowKey, TCPValue, KeyHasher> flows_;
+  std::unordered_map<FlowKey, FlowValue, KeyHasher> flows_table_;
+
+  // A mutex for the flows table.
+  std::mutex flows_table_mutex_;
 
   // When a TCP flow is complete it gets handed to this callback.
   const std::function<void(std::unique_ptr<TCPFlow>)> callback_;

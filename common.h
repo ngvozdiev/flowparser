@@ -49,10 +49,10 @@ class Timer {
       : start_point_(std::chrono::system_clock::now()) {
   }
 
-  uint32_t DurationMs() {
+  std::chrono::milliseconds DurationMillis() {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now() - start_point_);
-    return duration.count();
+    return duration;
   }
 
  private:

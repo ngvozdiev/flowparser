@@ -8,7 +8,7 @@ GTEST_HEADERS = $(GTEST_DIR)/include/gtest/*.h \
                 $(GTEST_DIR)/include/gtest/internal/*.h
 GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/src/*.h $(GTEST_HEADERS)
 
-SRCS=flows.cc packer.cc common.cc parser.cc
+SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc
 OBJS=$(subst .cc,.o,$(SRCS))
 RM=rm -f
 
@@ -21,6 +21,8 @@ gtest_main.o : $(GTEST_SRCS_)
             $(GTEST_DIR)/src/gtest_main.cc
 
 common.o: common.cc common.h
+
+periodic_runner.o: periodic_runner.cc periodic_runner.h
 
 packer.o: packer.cc packer.h common.o
 
@@ -45,6 +47,12 @@ parser_test.o: parser_test.cc parser.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c parser_test.cc
 
 parser_test: parser_test.o gtest_main.o gtest-all.o $(OBJS)
+	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
+
+periodic_runner_test.o: periodic_runner_test.cc periodic_runner.o
+	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c periodic_runner_test.cc
+
+periodic_runner_test: periodic_runner_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
 
 clean:

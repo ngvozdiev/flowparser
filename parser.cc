@@ -12,15 +12,15 @@ Status FlowParser::HandlePkt(const pcap::SniffIp& ip_header,
 
   // Lock the table mutex since we will be potentially modifying the table.
   {
-    std::unique_lock<std::mutex> lock(mu_);
-    TCPValue& value = flows_[key];
+    std::unique_lock<std::mutex> lock(flows_table_mutex_);
+    FlowValue& value = flows_table_[key];
 
-    if (value.flow_.get() == nullptr) {
-      value.flow_ = std::make_unique<TCPFlow>(timestamp, flow_timeout_);
+    if (value.second.get() == nullptr) {
+      value.second = std::make_unique<TCPFlow>(timestamp, flow_timeout_);
     }
 
     flow_mutex = &value.first;
-    flow_ptr = &value.second;
+    flow_ptr = value.second.get();
   }
 
   // Lock the flow mutex since we are going to be adding packets to it.
@@ -34,6 +34,48 @@ Status FlowParser::HandlePkt(const pcap::SniffIp& ip_header,
   }
 
   return Status::kStatusOK;
+}
+
+void FlowParser::CollectFlows() {
+  std::vector<std::unique_ptr<TCPFlow>> flows_to_collect;
+
+  // Lock the table mutex
+  {
+    std::unique_lock<std::mutex> table_lock(flows_table_mutex_);
+
+    auto it = flows_table_.begin();
+    while (it != flows_table_.end()) {
+      FlowValue& flow_mutex_and_flow = it->second;
+      std::mutex& flow_mutex = flow_mutex_and_flow.first;
+      auto& flow = flow_mutex_and_flow.second;
+
+      bool to_delete = false;
+      {
+        std::unique_lock<std::mutex> flow_lock(flow_mutex);
+        flow->UpdateAverages();
+
+        int64_t time_left = flow->TimeLeft(last_rx_);
+        if (time_left < 0) {
+          flow->Deactivate();
+          flows_to_collect.push_back(std::move(flow));
+
+          to_delete = true;
+        }
+      }
+
+      if (to_delete) {
+        flows_table_.erase(it++);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  if (!flows_to_collect.empty()) {
+    for (auto& flow : flows_to_collect) {
+      callback_(std::move(flow));
+    }
+  }
 }
 
 }
