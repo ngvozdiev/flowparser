@@ -24,7 +24,7 @@ class ParserTestFixture : public ::testing::Test {
 
   std::vector<std::pair<FlowKey, std::unique_ptr<TCPFlow>>>flows_;
   TCPPktGen pkt_gen_;
-  FlowParser fp_;
+  TCPFlowParser fp_;
 
   pcap::SniffIp pcap_ip_hdr_;
   pcap::SniffTcp pcap_tcp_hdr_;
@@ -187,7 +187,7 @@ TEST_F(ParserTestFixture, 1MPkts) {
               model[ { { src, dst }, { src_port, dst_port } }].push_back( {
                   ip_header, tcp_header });
 
-              fp_.HandlePkt(ip_header, tcp_header, time);
+              ASSERT_TRUE(fp_.HandlePkt(ip_header, tcp_header, time).ok());
             }
           }
         }

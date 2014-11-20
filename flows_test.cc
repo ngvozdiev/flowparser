@@ -100,7 +100,7 @@ TEST(Flows, PktRxSrcPortSameAsDstPort) {
   pcap::SniffIp ip_header = gen.GenerateIpHeader();
   pcap::SniffTcp tcp_header = gen.GenerateTCPHeader(1, 1);
 
-  ASSERT_FALSE(tcp_flow.PacketRx(ip_header, tcp_header, kInitTimestamp).ok());
+  ASSERT_TRUE(tcp_flow.PacketRx(ip_header, tcp_header, kInitTimestamp).ok());
 }
 
 TEST(Flows, InfoTotals) {

@@ -188,7 +188,8 @@ class UDPFlow : public Flow {
     return sizeof(UDPFlow) + BaseSizeBytes();
   }
 
-  Status PacketRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
+  Status PacketRx(const pcap::SniffIp& ip_header,
+                  const pcap::SniffUdp& udp_header, uint64_t timestamp) {
     return BasePacketRx(ip_header, timestamp);
   }
 };
@@ -247,7 +248,7 @@ class TCPFlow : public Flow {
 class TCPFlowIterator {
  public:
   TCPFlowIterator(const TCPFlow& parent)
-      : flow_it_(parent), // Intentional slicing
+      : flow_it_(parent),  // Intentional slicing
         ack_it_(parent.header_ack_),
         seq_it_(parent.header_seq_),
         flags_it_(parent.header_flags_),

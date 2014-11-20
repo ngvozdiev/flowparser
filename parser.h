@@ -24,14 +24,14 @@ static std::string IPToString(uint32_t ip) {
 // separate map.
 class FlowKey {
  public:
-  FlowKey(const pcap::SniffIp ip_header, const pcap::SniffTcp tcp_header)
+  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header)
       : src_(ip_header.ip_src.s_addr),
         dst_(ip_header.ip_dst.s_addr),
         sport_(tcp_header.th_sport),
         dport_(tcp_header.th_dport) {
   }
 
-  FlowKey(const pcap::SniffIp ip_header, const pcap::SniffUdp udp_header)
+  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header)
       : src_(ip_header.ip_src.s_addr),
         dst_(ip_header.ip_dst.s_addr),
         sport_(udp_header.uh_sport),
@@ -96,20 +96,22 @@ using std::pair;
 using std::unique_ptr;
 
 // The main parser class. This class stores tables with flow data and owns all
-// flow instances.
-class FlowParser {
+// flow instances. The first type is the flow class that will be stored, the
+// second is the transport header from pcap.
+template <typename T, typename P>
+class Parser {
  public:
-  typedef function<void(const FlowKey&, unique_ptr<TCPFlow>)> FlowCallback;
+  typedef function<void(const FlowKey&, unique_ptr<T>)> FlowCallback;
 
-  FlowParser(FlowCallback callback, uint64_t timeout)
+  Parser(FlowCallback callback, uint64_t timeout)
       : flow_timeout_(timeout),
-        last_rx_(std::numeric_limits<uint64_t>::max()),
+        last_rx_(0),
         callback_(callback) {
   }
 
   // Called when a new TCP packet arrives.
   Status HandlePkt(const pcap::SniffIp& ip_header,
-                   const pcap::SniffTcp& transport_header, uint64_t timestamp);
+                   const P& transport_header, uint64_t timestamp);
 
   // Times out flows that have expired.
   void CollectFlows() {
@@ -122,7 +124,7 @@ class FlowParser {
   }
 
  private:
-  typedef std::pair<std::mutex, std::unique_ptr<TCPFlow>> FlowValue;
+  typedef std::pair<std::mutex, std::unique_ptr<T>> FlowValue;
 
   // Performs a collection. Each flow is considered for collection based on an
   // evaluation function that is given the remaining amount of time that the
@@ -147,8 +149,12 @@ class FlowParser {
   // When a TCP flow is complete it gets handed to this callback.
   const FlowCallback callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(FlowParser);
+  DISALLOW_COPY_AND_ASSIGN(Parser);
 };
+
+typedef Parser<TCPFlow, pcap::SniffTcp> TCPFlowParser;
+typedef Parser<UDPFlow, pcap::SniffUdp> UDPFlowParser;
+
 }
 
 #endif  /* FLOWPARSER_PARSER_H */

@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O3
+CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O0
 GTEST_DIR = gtest
 GTEST_FLAGS=-isystem $(GTEST_DIR)/include
 LDFLAGS=-g -lpcap -pthread
@@ -8,7 +8,7 @@ GTEST_HEADERS = $(GTEST_DIR)/include/gtest/*.h \
                 $(GTEST_DIR)/include/gtest/internal/*.h
 GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/src/*.h $(GTEST_HEADERS)
 
-SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc
+SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc flowparser.cc
 OBJS=$(subst .cc,.o,$(SRCS))
 RM=rm -f
 
@@ -29,6 +29,8 @@ packer.o: packer.cc packer.h common.o
 flows.o: flows.cc flows.h common.o packer.o
 
 parser.o: parser.cc parser.h flows.o
+
+flowparser.o: flowparser.cc flowparser.h parser.o
 
 # Tests
 flows_test.o: flows_test.cc common_test.h flows.o
@@ -53,6 +55,12 @@ periodic_runner_test.o: periodic_runner_test.cc periodic_runner.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c periodic_runner_test.cc
 
 periodic_runner_test: periodic_runner_test.o gtest_main.o gtest-all.o $(OBJS)
+	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
+
+flowparser_test.o: flowparser_test.cc flowparser.o
+	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c flowparser_test.cc
+
+flowparser_test: flowparser_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
 
 clean:

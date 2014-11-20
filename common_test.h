@@ -86,15 +86,20 @@ class TCPPktGen {
 static void AssertIPHeadersEqual(const pcap::SniffIp& pcap_header,
                                  uint64_t timestamp,
                                  const IPHeader& ip_header) {
+  uint16_t ip_id = ntohs(pcap_header.ip_id);
+  uint16_t ip_len = ntohs(pcap_header.ip_len);
+
   ASSERT_EQ(timestamp, ip_header.timestamp);
-  ASSERT_EQ(ntohs(pcap_header.ip_id), ip_header.id);
-  ASSERT_EQ(ntohs(pcap_header.ip_len), ip_header.length);
+  ASSERT_EQ(ip_id, ip_header.id);
+  ASSERT_EQ(ip_len, ip_header.length);
   ASSERT_EQ(pcap_header.ip_ttl, ip_header.ttl);
 }
 
 static void AssertTCPHeadersEqual(const pcap::SniffTcp& pcap_header,
                                   const TCPHeader& tcp_header) {
-  ASSERT_EQ(ntohs(pcap_header.th_win), tcp_header.win);
+  uint16_t th_win = ntohs(pcap_header.th_win);
+
+  ASSERT_EQ(th_win, tcp_header.win);
   ASSERT_EQ(ntohl(pcap_header.th_seq), tcp_header.seq);
   ASSERT_EQ(ntohl(pcap_header.th_ack), tcp_header.ack);
   ASSERT_EQ(pcap_header.th_flags, tcp_header.flags);

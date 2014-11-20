@@ -50,6 +50,10 @@ Status Flow::BasePacketRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
     return "Tried to modify passive flow";
   }
 
+  if (ip_header.ip_dst.s_addr == ip_header.ip_src.s_addr) {
+    return "IP src same as destination in flow";
+  }
+
   auto result = timestamps_.Append(timestamp);
   if (!result.ok()) {
     return result;
