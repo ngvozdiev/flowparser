@@ -22,10 +22,20 @@ class TCPPktGen {
   }
 
   pcap::SniffIp GenerateIpHeader() {
+    uint32_t src = ushort_dist_(rnd_);
+    uint32_t dst = src;
+    while (dst == src) {
+      dst = ushort_dist_(rnd_);
+    }
+
+    return GenerateIpHeader(src, dst);
+  }
+
+  pcap::SniffIp GenerateIpHeader(uint32_t src_ip, uint32_t dst_ip) {
     pcap::SniffIp ip_header;
 
-    ip_header.ip_dst.s_addr = uint_dist_(rnd_);
-    ip_header.ip_src.s_addr = uint_dist_(rnd_);
+    ip_header.ip_src.s_addr = htonl(src_ip);
+    ip_header.ip_dst.s_addr = htonl(dst_ip);
     ip_header.ip_id = ushort_dist_(rnd_);
     ip_header.ip_len = ushort_dist_(rnd_);
     ip_header.ip_tos = uchar_dist_(rnd_);
@@ -39,13 +49,23 @@ class TCPPktGen {
   }
 
   pcap::SniffTcp GenerateTCPHeader() {
+    uint16_t sport = ushort_dist_(rnd_);
+    uint16_t dport = sport;
+    while (dport == sport) {
+      dport = ushort_dist_(rnd_);
+    }
+
+    return GenerateTCPHeader(sport, dport);
+  }
+
+  pcap::SniffTcp GenerateTCPHeader(uint16_t sport, uint16_t dport) {
     pcap::SniffTcp tcp_header;
 
+    tcp_header.th_sport = htons(sport);
+    tcp_header.th_dport = htons(dport);
     tcp_header.th_ack = uint_dist_(rnd_);
-    tcp_header.th_dport = ushort_dist_(rnd_);
     tcp_header.th_flags = uchar_dist_(rnd_);
     tcp_header.th_seq = uint_dist_(rnd_);
-    tcp_header.th_sport = ushort_dist_(rnd_);
     tcp_header.th_win = ushort_dist_(rnd_);
     tcp_header.th_offx2 = 0;
     tcp_header.th_sum = 0;
@@ -57,13 +77,28 @@ class TCPPktGen {
  private:
   std::default_random_engine rnd_;
 
+  // Different random distributions for the different field types.
   std::uniform_int_distribution<uint32_t> uint_dist_;
-
   std::uniform_int_distribution<uint16_t> ushort_dist_;
-
   std::uniform_int_distribution<uint8_t> uchar_dist_;
 };
 
+static void AssertIPHeadersEqual(const pcap::SniffIp& pcap_header,
+                                 uint64_t timestamp,
+                                 const IPHeader& ip_header) {
+  ASSERT_EQ(timestamp, ip_header.timestamp);
+  ASSERT_EQ(ntohs(pcap_header.ip_id), ip_header.id);
+  ASSERT_EQ(ntohs(pcap_header.ip_len), ip_header.length);
+  ASSERT_EQ(pcap_header.ip_ttl, ip_header.ttl);
+}
+
+static void AssertTCPHeadersEqual(const pcap::SniffTcp& pcap_header,
+                                  const TCPHeader& tcp_header) {
+  ASSERT_EQ(ntohs(pcap_header.th_win), tcp_header.win);
+  ASSERT_EQ(ntohl(pcap_header.th_seq), tcp_header.seq);
+  ASSERT_EQ(ntohl(pcap_header.th_ack), tcp_header.ack);
+  ASSERT_EQ(pcap_header.th_flags, tcp_header.flags);
+}
 
 }
 }

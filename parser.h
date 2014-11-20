@@ -13,6 +13,12 @@
 
 namespace flowparser {
 
+static std::string IPToString(uint32_t ip) {
+  char str[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &ip, str, INET_ADDRSTRLEN);
+  return std::string(str);
+}
+
 // Each flow is indexed by this value. Note that it does not contain a flow
 // type. Only two flow types are supported - TCP and UDP and each has a
 // separate map.
@@ -35,6 +41,12 @@ class FlowKey {
   bool operator==(const FlowKey &other) const {
     return (src_ == other.src_ && dst_ == other.dst_ && sport_ == other.sport_
         && dport_ == other.dport_);
+  }
+
+  std::string ToString() const {
+    return "(src='" + IPToString(src()) + "', dst='" + IPToString(dst())
+        + "', src_port=" + std::to_string(src_port()) + ", dst_port="
+        + std::to_string(dst_port()) + ")";
   }
 
   // The source IP address of the flow (in host byte order)
@@ -79,12 +91,17 @@ struct KeyHasher {
   }
 };
 
+using std::function;
+using std::pair;
+using std::unique_ptr;
+
 // The main parser class. This class stores tables with flow data and owns all
 // flow instances.
 class FlowParser {
  public:
-  FlowParser(std::function<void(std::unique_ptr<TCPFlow>)> callback,
-             uint64_t timeout)
+  typedef function<void(const FlowKey&, unique_ptr<TCPFlow>)> FlowCallback;
+
+  FlowParser(FlowCallback callback, uint64_t timeout)
       : flow_timeout_(timeout),
         last_rx_(std::numeric_limits<uint64_t>::max()),
         callback_(callback) {
@@ -96,7 +113,7 @@ class FlowParser {
 
   // Times out flows that have expired.
   void CollectFlows() {
-    PrivateCollectFlows([](int64_t time_left) {return time_left < 0;});
+    PrivateCollectFlows([](int64_t time_left) {return time_left <= 0;});
   }
 
   // Times out all flow regardless of how close they are to expiring.
@@ -128,7 +145,7 @@ class FlowParser {
   std::mutex flows_table_mutex_;
 
   // When a TCP flow is complete it gets handed to this callback.
-  const std::function<void(std::unique_ptr<TCPFlow>)> callback_;
+  const FlowCallback callback_;
 
   DISALLOW_COPY_AND_ASSIGN(FlowParser);
 };

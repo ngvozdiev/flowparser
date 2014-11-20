@@ -19,6 +19,11 @@ Status FlowParser::HandlePkt(const pcap::SniffIp& ip_header,
       value.second = std::make_unique<TCPFlow>(timestamp, flow_timeout_);
     }
 
+    // Update the parser's last RX time. This is slightly odd - we should only
+    // update it once we know we will be able to add the packet to the flow,
+    // but this requires locking the mutex again later.
+    last_rx_ = timestamp;
+
     flow_mutex = &value.first;
     flow_ptr = value.second.get();
   }
@@ -38,7 +43,7 @@ Status FlowParser::HandlePkt(const pcap::SniffIp& ip_header,
 
 void FlowParser::PrivateCollectFlows(
     std::function<bool(int64_t)> eval_for_collection) {
-  std::vector<std::unique_ptr<TCPFlow>> flows_to_collect;
+  std::vector<std::pair<FlowKey, std::unique_ptr<TCPFlow>>>flows_to_collect;
 
   // Lock the table mutex
   {
@@ -58,7 +63,7 @@ void FlowParser::PrivateCollectFlows(
         int64_t time_left = flow->TimeLeft(last_rx_);
         if (eval_for_collection(time_left)) {
           flow->Deactivate();
-          flows_to_collect.push_back(std::move(flow));
+          flows_to_collect.push_back( {it->first, std::move(flow)});
 
           to_delete = true;
         }
@@ -73,8 +78,8 @@ void FlowParser::PrivateCollectFlows(
   }
 
   if (!flows_to_collect.empty()) {
-    for (auto& flow : flows_to_collect) {
-      callback_(std::move(flow));
+    for (auto& key_and_flow : flows_to_collect) {
+      callback_(key_and_flow.first, std::move(key_and_flow.second));
     }
   }
 }

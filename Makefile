@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O0
+CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O3
 GTEST_DIR = gtest
 GTEST_FLAGS=-isystem $(GTEST_DIR)/include
 LDFLAGS=-g -lpcap -pthread

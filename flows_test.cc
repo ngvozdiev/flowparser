@@ -8,23 +8,6 @@
 namespace flowparser {
 namespace test {
 
-static void AssertIPHeadersEqual(const pcap::SniffIp& pcap_header,
-                                 uint64_t timestamp,
-                                 const IPHeader& ip_header) {
-  ASSERT_EQ(timestamp, ip_header.timestamp);
-  ASSERT_EQ(ntohs(pcap_header.ip_id), ip_header.id);
-  ASSERT_EQ(ntohs(pcap_header.ip_len), ip_header.length);
-  ASSERT_EQ(pcap_header.ip_ttl, ip_header.ttl);
-}
-
-static void AssertTCPHeadersEqual(const pcap::SniffTcp& pcap_header,
-                                  const TCPHeader& tcp_header) {
-  ASSERT_EQ(ntohs(pcap_header.th_win), tcp_header.win);
-  ASSERT_EQ(ntohl(pcap_header.th_seq), tcp_header.seq);
-  ASSERT_EQ(ntohl(pcap_header.th_ack), tcp_header.ack);
-  ASSERT_EQ(pcap_header.th_flags, tcp_header.flags);
-}
-
 constexpr uint64_t kInitTimestamp = 10000;
 constexpr uint64_t kDefaultTimeout = 1000;
 
@@ -98,6 +81,26 @@ TEST(Flows, InfoAvgDecay) {
 
   ASSERT_NEAR(0, info.avg_pkts_per_period, 0.01);
   ASSERT_NEAR(0.0, info.avg_bytes_per_period, 25);
+}
+
+TEST(Flows, PktRxSrcIpSameAsDstIp) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+  TCPPktGen gen(1);
+
+  pcap::SniffIp ip_header = gen.GenerateIpHeader(1, 1);
+  pcap::SniffTcp tcp_header = gen.GenerateTCPHeader();
+
+  ASSERT_FALSE(tcp_flow.PacketRx(ip_header, tcp_header, kInitTimestamp).ok());
+}
+
+TEST(Flows, PktRxSrcPortSameAsDstPort) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+  TCPPktGen gen(1);
+
+  pcap::SniffIp ip_header = gen.GenerateIpHeader();
+  pcap::SniffTcp tcp_header = gen.GenerateTCPHeader(1, 1);
+
+  ASSERT_FALSE(tcp_flow.PacketRx(ip_header, tcp_header, kInitTimestamp).ok());
 }
 
 TEST(Flows, InfoTotals) {
