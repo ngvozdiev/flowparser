@@ -9,6 +9,16 @@
 
 namespace flowparser {
 
+// The flow types supported.
+enum FlowType {
+  TCP,
+  UDP,
+  ICMP,
+  ESP
+};
+
+// A flow can be in one of two states - passive means that the flow has timed
+// out.
 enum FlowState {
   ACTIVE,
   PASSIVE
@@ -84,11 +94,15 @@ class Flow {
     return (last_rx_time_ + timeout_) - time_now;
   }
 
+  FlowType type() const {
+    return type_;
+  }
+
  protected:
-  Flow(uint64_t timestamp, uint64_t timeout)
+  Flow(uint64_t timestamp, uint64_t timeout, FlowType type)
       : first_rx_time_(timestamp),
         timeout_(timeout),
-        state_(FlowState::ACTIVE) {
+        type_(type), state_(FlowState::ACTIVE) {
   }
 
   // Returns the sum of sizes of headers and timestamps stored. Does not include
@@ -104,6 +118,12 @@ class Flow {
 
   // How long after the last rx packet the flow should be considered timed out.
   const uint64_t timeout_;
+
+  // Even though all flow classes inherit from this one it is still convenient
+  // to keep track of the flow type in the base class in case a more specific
+  // class is sliced to the base one and the user still needs to know what the
+  // original flow type was.
+  const FlowType type_;
 
   // The current state of this flow. This variable should be updated atomically.
   FlowState state_;
@@ -195,7 +215,7 @@ class FlowIterator {
 class UDPFlow : public Flow {
  public:
   UDPFlow(uint64_t init_timestamp, uint64_t timeout)
-      : Flow::Flow(init_timestamp, timeout) {
+      : Flow::Flow(init_timestamp, timeout, FlowType::UDP) {
   }
 
   size_t SizeBytes() {
@@ -213,7 +233,7 @@ class UDPFlow : public Flow {
 class TCPFlow : public Flow {
  public:
   TCPFlow(uint64_t init_timestamp, uint64_t timeout)
-      : Flow::Flow(init_timestamp, timeout) {
+      : Flow::Flow(init_timestamp, timeout, FlowType::TCP) {
   }
 
   size_t SizeBytes() {
@@ -297,7 +317,7 @@ class TCPFlowIterator {
 class ICMPFlow : public Flow {
  public:
   ICMPFlow(uint64_t init_timestamp, uint64_t timeout)
-      : Flow::Flow(init_timestamp, timeout) {
+      : Flow::Flow(init_timestamp, timeout, FlowType::ICMP) {
   }
 
   size_t SizeBytes() {
@@ -364,7 +384,7 @@ class ICMPFlowIterator {
 class ESPFlow : public Flow {
  public:
   ESPFlow(uint64_t init_timestamp, uint64_t timeout)
-      : Flow::Flow(init_timestamp, timeout) {
+      : Flow::Flow(init_timestamp, timeout, FlowType::ESP) {
   }
 
   size_t SizeBytes() {

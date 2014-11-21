@@ -24,6 +24,23 @@ TEST(Flows, InfoInit) {
   ASSERT_EQ(0, info.size_bytes);
 }
 
+TEST(Flows, Type) {
+  TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
+  ASSERT_EQ(FlowType::TCP, tcp_flow.type());
+
+  const Flow& flow = tcp_flow;
+  ASSERT_EQ(FlowType::TCP, flow.type());
+
+  UDPFlow udp_flow(kInitTimestamp, kDefaultTimeout);
+  ASSERT_EQ(FlowType::UDP, udp_flow.type());
+
+  ICMPFlow icmp_flow(kInitTimestamp, kDefaultTimeout);
+  ASSERT_EQ(FlowType::ICMP, icmp_flow.type());
+
+  ESPFlow esp_flow(kInitTimestamp, kDefaultTimeout);
+  ASSERT_EQ(FlowType::ESP, esp_flow.type());
+}
+
 TEST(Flows, InfoAvgNoPkts) {
   TCPFlow tcp_flow(kInitTimestamp, kDefaultTimeout);
 

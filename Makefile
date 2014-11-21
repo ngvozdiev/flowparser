@@ -30,7 +30,7 @@ flows.o: flows.cc flows.h common.o packer.o
 
 parser.o: parser.cc parser.h flows.o
 
-flowparser.o: flowparser.cc flowparser.h parser.o
+flowparser.o: flowparser.cc flowparser.h parser.o periodic_runner.o
 
 # Tests
 flows_test.o: flows_test.cc common_test.h flows.o
@@ -62,6 +62,13 @@ flowparser_test.o: flowparser_test.cc flowparser.o
 
 flowparser_test: flowparser_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
+
+# Examples
+
+examples/size_binner.o: examples/size_binner.cc flowparser.o
+
+examples/size_binner: examples/size_binner.o $(OBJS)
+	$(CXX) $^ -o $@ $(LDFLAGS)
 
 clean:
 	$(RM) *.o *.a *.gcov *.gcda *.gcno *_test 
