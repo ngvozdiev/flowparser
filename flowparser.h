@@ -44,6 +44,14 @@ class FlowParserConfig {
     esp_callback_ = esp_callback;
   }
 
+  void BadStatusCallback(std::function<void(Status status)> status_callback) {
+    bad_status_callback_ = status_callback;
+  }
+
+  void InfoCallback(std::function<void(const std::string&)> info_callback) {
+    info_callback_ = info_callback;
+  }
+
  private:
   // The source that packets will be read from. Can be either a filename or a
   // device name.
