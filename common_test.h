@@ -43,7 +43,6 @@ class TCPPktGen {
     ip_header.ip_off = 0;
     ip_header.ip_p = 0;
     ip_header.ip_sum = 0;
-    ip_header.ip_vhl = 0;
 
     return ip_header;
   }
@@ -67,7 +66,6 @@ class TCPPktGen {
     tcp_header.th_flags = uchar_dist_(rnd_);
     tcp_header.th_seq = uint_dist_(rnd_);
     tcp_header.th_win = ushort_dist_(rnd_);
-    tcp_header.th_offx2 = 0;
     tcp_header.th_sum = 0;
     tcp_header.th_urp = 0;
 

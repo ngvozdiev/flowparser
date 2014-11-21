@@ -31,6 +31,18 @@ struct TCPHeader {
   uint8_t flags = 0;
 };
 
+// ICMP header.
+struct ICMPHeader {
+  uint8_t type;
+  uint8_t code;
+};
+
+// ESP header.
+struct ESPHeader {
+  uint32_t spi;
+  uint32_t seq;
+};
+
 // Information about a flow.
 struct FlowInfo {
   double avg_pkts_per_period = 0.0;
@@ -178,6 +190,8 @@ class FlowIterator {
   DISALLOW_COPY_AND_ASSIGN(FlowIterator);
 };
 
+// A UDP flow is just an IP header. The src/dst port information is stored as
+// part of FlowKey.
 class UDPFlow : public Flow {
  public:
   UDPFlow(uint64_t init_timestamp, uint64_t timeout)
@@ -194,6 +208,8 @@ class UDPFlow : public Flow {
   }
 };
 
+// Four fields are tracked for TCP headers - flags, sequence numbers, ack
+// numbers and window sizes.
 class TCPFlow : public Flow {
  public:
   TCPFlow(uint64_t init_timestamp, uint64_t timeout)
@@ -226,7 +242,7 @@ class TCPFlow : public Flow {
     return Status::kStatusOK;
   }
 
- protected:
+ private:
   // TCP flag fields of seen packets.
   RLEField<uint8_t> header_flags_;
 
@@ -239,7 +255,6 @@ class TCPFlow : public Flow {
   // TCP window fields of seen packets.
   RLEField<u_short> header_win_;
 
- private:
   friend class TCPFlowIterator;
 };
 
@@ -276,6 +291,139 @@ class TCPFlowIterator {
   RLEFieldIterator<uint16_t> win_it_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPFlowIterator);
+};
+
+// For ICMP two fields are tracked - type and code.
+class ICMPFlow : public Flow {
+ public:
+  ICMPFlow(uint64_t init_timestamp, uint64_t timeout)
+      : Flow::Flow(init_timestamp, timeout) {
+  }
+
+  size_t SizeBytes() {
+    size_t return_size = sizeof(TCPFlow) + BaseSizeBytes();
+
+    return_size += header_type_.SizeBytes();
+    return_size += header_code_.SizeBytes();
+
+    return return_size;
+  }
+
+  Status PacketRx(const pcap::SniffIp& ip_header,
+                  const pcap::SniffIcmp& icmp_header, uint64_t timestamp) {
+    auto status = Flow::BasePacketRx(ip_header, timestamp);
+    if (!status.ok()) {
+      return status;
+    }
+
+    header_type_.Append(icmp_header.icmp_type);
+    header_code_.Append(icmp_header.icmp_code);
+
+    return Status::kStatusOK;
+  }
+
+ private:
+  // TCP flag fields of seen packets.
+  RLEField<uint8_t> header_type_;
+
+  // TCP flag fields of seen packets.
+  RLEField<uint8_t> header_code_;
+
+  friend class ICMPFlowIterator;
+};
+
+class ICMPFlowIterator {
+ public:
+  ICMPFlowIterator(const ICMPFlow& parent)
+      : flow_it_(parent),  // Intentional slicing
+        type_it_(parent.header_type_),
+        code_it_(parent.header_code_) {
+  }
+
+  bool Next(IPHeader* ip_header, ICMPHeader* icmp_header) {
+    if (!flow_it_.Next(ip_header)) {
+      return false;
+    }
+
+    type_it_.Next(&icmp_header->type);
+    code_it_.Next(&icmp_header->code);
+
+    return true;
+  }
+
+ private:
+  FlowIterator flow_it_;
+  RLEFieldIterator<uint8_t> type_it_;
+  RLEFieldIterator<uint8_t> code_it_;
+
+  DISALLOW_COPY_AND_ASSIGN(ICMPFlowIterator);
+};
+
+// ESP traffic is not uncommon on backbone links - hence it has its own flow
+// type.
+class ESPFlow : public Flow {
+ public:
+  ESPFlow(uint64_t init_timestamp, uint64_t timeout)
+      : Flow::Flow(init_timestamp, timeout) {
+  }
+
+  size_t SizeBytes() {
+    size_t return_size = sizeof(TCPFlow) + BaseSizeBytes();
+
+    return_size += header_spi_.SizeBytes();
+    return_size += header_seq_.SizeBytes();
+
+    return return_size;
+  }
+
+  Status PacketRx(const pcap::SniffIp& ip_header,
+                  const pcap::SniffEsp& esp_header, uint64_t timestamp) {
+    auto status = Flow::BasePacketRx(ip_header, timestamp);
+    if (!status.ok()) {
+      return status;
+    }
+
+    header_spi_.Append(ntohl(esp_header.spi));
+    header_seq_.Append(ntohl(esp_header.seq));
+
+    return Status::kStatusOK;
+  }
+
+ private:
+  // TCP flag fields of seen packets.
+  RLEField<uint32_t> header_spi_;
+
+  // TCP flag fields of seen packets.
+  RLEField<uint32_t> header_seq_;
+
+  friend class ESPFlowIterator;
+};
+
+class ESPFlowIterator {
+ public:
+  ESPFlowIterator(const ESPFlow& parent)
+      : flow_it_(parent),  // Intentional slicing
+        spi_it_(parent.header_spi_),
+        seq_it_(parent.header_seq_) {
+  }
+
+  bool Next(IPHeader* ip_header, ESPHeader* esp_header) {
+    if (!flow_it_.Next(ip_header)) {
+      return false;
+    }
+
+    spi_it_.Next(&esp_header->spi);
+    seq_it_.Next(&esp_header->seq);
+
+    return true;
+  }
+
+ private:
+  FlowIterator flow_it_;
+  RLEFieldIterator<uint32_t> spi_it_;
+  RLEFieldIterator<uint32_t> seq_it_;
+
+  DISALLOW_COPY_AND_ASSIGN(ESPFlowIterator);
 };
 
 }

@@ -92,5 +92,7 @@ void Parser<T,P>::PrivateCollectFlows(
 
 template class Parser<TCPFlow, pcap::SniffTcp>;
 template class Parser<UDPFlow, pcap::SniffUdp>;
+template class Parser<ICMPFlow, pcap::SniffIcmp>;
+template class Parser<ESPFlow, pcap::SniffEsp>;
 
 }

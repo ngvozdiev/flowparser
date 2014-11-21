@@ -38,13 +38,30 @@ class FlowKey {
         dport_(udp_header.uh_dport) {
   }
 
+  // In the case of ICMP a flow is considered to be all packets between the same
+  // pair of endpoints (since there are no port numbers in ICMP)
+  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffIcmp& icmp_header)
+      : src_(ip_header.ip_src.s_addr),
+        dst_(ip_header.ip_dst.s_addr),
+        sport_(0),
+        dport_(0) {
+  }
+
+  // For ESP the endpoints and the SPI is considered.
+  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffEsp& esp_header)
+        : src_(ip_header.ip_src.s_addr),
+          dst_(ip_header.ip_dst.s_addr),
+          sport_(esp_header.spi & 0x0000ffff),
+          dport_(esp_header.spi >> 16) {
+    }
+
   bool operator==(const FlowKey &other) const {
     return (src_ == other.src_ && dst_ == other.dst_ && sport_ == other.sport_
         && dport_ == other.dport_);
   }
 
   std::string ToString() const {
-    return "(src='" + IPToString(src()) + "', dst='" + IPToString(dst())
+    return "(src='" + IPToString(src_) + "', dst='" + IPToString(dst_)
         + "', src_port=" + std::to_string(src_port()) + ", dst_port="
         + std::to_string(dst_port()) + ")";
   }
@@ -98,7 +115,7 @@ using std::unique_ptr;
 // The main parser class. This class stores tables with flow data and owns all
 // flow instances. The first type is the flow class that will be stored, the
 // second is the transport header from pcap.
-template <typename T, typename P>
+template<typename T, typename P>
 class Parser {
  public:
   typedef function<void(const FlowKey&, unique_ptr<T>)> FlowCallback;
@@ -110,8 +127,8 @@ class Parser {
   }
 
   // Called when a new TCP packet arrives.
-  Status HandlePkt(const pcap::SniffIp& ip_header,
-                   const P& transport_header, uint64_t timestamp);
+  Status HandlePkt(const pcap::SniffIp& ip_header, const P& transport_header,
+                   uint64_t timestamp);
 
   // Times out flows that have expired.
   void CollectFlows() {
@@ -154,6 +171,8 @@ class Parser {
 
 typedef Parser<TCPFlow, pcap::SniffTcp> TCPFlowParser;
 typedef Parser<UDPFlow, pcap::SniffUdp> UDPFlowParser;
+typedef Parser<ICMPFlow, pcap::SniffIcmp> ICMPFlowParser;
+typedef Parser<ESPFlow, pcap::SniffEsp> ESPFlowParser;
 
 }
 

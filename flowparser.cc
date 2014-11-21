@@ -71,7 +71,7 @@ Status FlowParser::HandleTcp(uint64_t timestamp, size_t size_ip,
   const pcap::SniffTcp* tcp_header = reinterpret_cast<const pcap::SniffTcp*>(pkt
       + datalink_offset_ + size_ip);
 
-  size_t size_tcp = TH_OFF(tcp_header) * 4;
+  size_t size_tcp = tcp_header->th_off * 4;
   if (size_tcp < 20) {
     return "TCP header too short";
   }
@@ -87,6 +87,22 @@ Status FlowParser::HandleUdp(const uint64_t timestamp, size_t size_ip,
   return udp_parser_.HandlePkt(ip_header, *udp_header, timestamp);
 }
 
+Status FlowParser::HandleIcmp(const uint64_t timestamp, size_t size_ip,
+                              const pcap::SniffIp& ip_header,
+                              const uint8_t* pkt) {
+  const pcap::SniffIcmp* icmp_header =
+      reinterpret_cast<const pcap::SniffIcmp*>(pkt + datalink_offset_ + size_ip);
+  return icmp_parser_.HandlePkt(ip_header, *icmp_header, timestamp);
+}
+
+Status FlowParser::HandleEsp(const uint64_t timestamp, size_t size_ip,
+                             const pcap::SniffIp& ip_header,
+                             const uint8_t* pkt) {
+  const pcap::SniffEsp* esp_header = reinterpret_cast<const pcap::SniffEsp*>(pkt
+      + datalink_offset_ + size_ip);
+  return esp_parser_.HandlePkt(ip_header, *esp_header, timestamp);
+}
+
 // Called to handle a single packet. Will dispatch it to HandleTcp or
 // HandleUdp.This is in a free function because the pcap library expects an
 // unbound function pointer
@@ -94,13 +110,13 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
                       const u_char* packet) {
   FlowParser* fparser = reinterpret_cast<FlowParser*>(flow_parser);
 
-  uint64_t timestamp = static_cast<uint64_t>(header->ts.tv_sec)
-      * kMillion + static_cast<uint64_t>(header->ts.tv_usec);
+  uint64_t timestamp = static_cast<uint64_t>(header->ts.tv_sec) * kMillion
+      + static_cast<uint64_t>(header->ts.tv_usec);
 
   const pcap::SniffIp* ip_header = reinterpret_cast<const pcap::SniffIp*>(packet
       + fparser->datalink_offset());
 
-  size_t size_ip = IP_HL(ip_header) * 4;
+  size_t size_ip = ip_header->ip_hl * 4;
   if (size_ip < 20) {
     fparser->HandleBadStatus(
         "Invalid IP header length: " + std::to_string(size_ip)
@@ -119,6 +135,24 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
 
   if (ip_header->ip_p == IPPROTO_UDP) {
     Status status = fparser->HandleUdp(timestamp, size_ip, *ip_header, packet);
+    if (!status.ok()) {
+      fparser->HandleBadStatus(status);
+    }
+
+    return;
+  }
+
+  if (ip_header->ip_p == IPPROTO_ICMP) {
+    Status status = fparser->HandleIcmp(timestamp, size_ip, *ip_header, packet);
+    if (!status.ok()) {
+      fparser->HandleBadStatus(status);
+    }
+
+    return;
+  }
+
+  if (ip_header->ip_p == IPPROTO_ESP) {
+    Status status = fparser->HandleEsp(timestamp, size_ip, *ip_header, packet);
     if (!status.ok()) {
       fparser->HandleBadStatus(status);
     }

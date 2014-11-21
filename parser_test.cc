@@ -40,7 +40,7 @@ TEST_F(ParserTestFixture, Init) {
 TEST_F(ParserTestFixture, KeyToString) {
   FlowKey key(pcap_ip_hdr_, pcap_tcp_hdr_);
 
-  ASSERT_EQ("(src='1.0.0.0', dst='2.0.0.0', src_port=5, dst_port=6)",
+  ASSERT_EQ("(src='0.0.0.1', dst='0.0.0.2', src_port=5, dst_port=6)",
             key.ToString());
 }
 

@@ -15,11 +15,6 @@ class FlowParserConfig {
       : offline_(false),
         snapshot_len_(100),
         bpf_filter_("ip"),
-        bad_status_callback_([](Status status) {
-          std::cout << "ERROR: " << status.ToString() << "\n";}),
-        info_callback_([](const std::string& info) {
-          std::cout << "INFO: " << info << "\n";
-        }),
         flow_timeout_(2 * 60 * kMillion) {
   }
 
@@ -31,6 +26,22 @@ class FlowParserConfig {
   void OnlineTrace(const std::string& iface) {
     source_ = iface;
     offline_ = false;
+  }
+
+  void TCPCallback(TCPFlowParser::FlowCallback tcp_callback) {
+    tcp_callback_ = tcp_callback;
+  }
+
+  void UDPCallback(UDPFlowParser::FlowCallback udp_callback) {
+    udp_callback_ = udp_callback;
+  }
+
+  void ICMPCallback(ICMPFlowParser::FlowCallback icmp_callback) {
+    icmp_callback_ = icmp_callback;
+  }
+
+  void ESPCallback(ESPFlowParser::FlowCallback esp_callback) {
+    esp_callback_ = esp_callback;
   }
 
  private:
@@ -47,32 +58,50 @@ class FlowParserConfig {
   // The BPF filter to use when capturing.
   std::string bpf_filter_;
 
-  // A function that will be called when a failure during packet capture occurs.
-  // By default will print the error to stdout.
-  std::function<void(Status status)> bad_status_callback_;
-
-  // A function that will be called if the parser wants to send a text info
-  // message. By default will print to stdout.
-  std::function<void(const std::string&)> info_callback_;
-
   // How long to wait before a flow with no traffic is considered timed out.
   // This is in whatever precision pcap provides (microseconds by default).
   // The default value is 2min.
   uint64_t flow_timeout_;
+
+  // A function that will be called when a failure during packet capture occurs.
+  // By default will print the error to stdout.
+  std::function<void(Status status)> bad_status_callback_ =
+      [](Status status) {std::cout << "ERROR: " << status.ToString() << "\n";};
+
+  // A function that will be called if the parser wants to send a text info
+  // message. By default will print to stdout.
+  std::function<void(const std::string&)> info_callback_ =
+      [](const std::string& info) {std::cout << "INFO: " << info << "\n";};
+
+  // A callback for TCP flows.
+  TCPFlowParser::FlowCallback tcp_callback_ =
+      [](const FlowKey&, unique_ptr<TCPFlow>) {};
+
+  // A callback for UDP flows.
+  UDPFlowParser::FlowCallback udp_callback_ =
+      [](const FlowKey&, unique_ptr<UDPFlow>) {};
+
+  // A callback for ICMP flows.
+  ICMPFlowParser::FlowCallback icmp_callback_ =
+      [](const FlowKey&, unique_ptr<ICMPFlow>) {};
+
+  // A callback for ESP flows.
+  ESPFlowParser::FlowCallback esp_callback_ =
+      [](const FlowKey&, unique_ptr<ESPFlow>) {};
 
   friend class FlowParser;
 };
 
 class FlowParser {
  public:
-  FlowParser(const FlowParserConfig& config,
-             TCPFlowParser::FlowCallback tcp_callback,
-             UDPFlowParser::FlowCallback udp_callback)
+  FlowParser(const FlowParserConfig& config)
       : config_(config),
         pcap_handle_(nullptr),
         datalink_offset_(0),
-        tcp_parser_(tcp_callback, config_.flow_timeout_),
-        udp_parser_(udp_callback, config_.flow_timeout_),
+        tcp_parser_(config.tcp_callback_, config_.flow_timeout_),
+        udp_parser_(config.udp_callback_, config_.flow_timeout_),
+        icmp_parser_(config.icmp_callback_, config_.flow_timeout_),
+        esp_parser_(config.esp_callback_, config_.flow_timeout_),
         collector_([this] {CollectAll();}, std::chrono::milliseconds(1000)) {
   }
 
@@ -85,6 +114,14 @@ class FlowParser {
   Status HandleUdp(const uint64_t timestamp, size_t size_ip,
                    const pcap::SniffIp& ip_header, const uint8_t* pkt);
 
+  // Handles a single ICMP packet.
+  Status HandleIcmp(const uint64_t timestamp, size_t size_ip,
+                    const pcap::SniffIp& ip_header, const uint8_t* pkt);
+
+  // Handles a single ESP packet.
+  Status HandleEsp(const uint64_t timestamp, size_t size_ip,
+                   const pcap::SniffIp& ip_header, const uint8_t* pkt);
+
   size_t datalink_offset() const {
     return datalink_offset_;
   }
@@ -93,6 +130,25 @@ class FlowParser {
   // FlowParser.
   void HandleBadStatus(Status status) const {
     config_.bad_status_callback_(status);
+  }
+
+  Status RunTrace() {
+    auto status = PcapOpen();
+    if (!status.ok()) {
+      return status;
+    }
+
+    collector_.Start();
+
+    PcapLoop();
+
+    collector_.Stop();
+    tcp_parser_.CollectAllFlows();
+    udp_parser_.CollectAllFlows();
+    icmp_parser_.CollectAllFlows();
+    esp_parser_.CollectAllFlows();
+
+    return Status::kStatusOK;
   }
 
  private:
@@ -108,6 +164,8 @@ class FlowParser {
   void CollectAll() {
     tcp_parser_.CollectFlows();
     udp_parser_.CollectFlows();
+    icmp_parser_.CollectFlows();
+    esp_parser_.CollectFlows();
   }
 
   // A raw pointer to pcap. Will be cleaned up in destructor.
@@ -119,6 +177,8 @@ class FlowParser {
 
   TCPFlowParser tcp_parser_;
   UDPFlowParser udp_parser_;
+  ICMPFlowParser icmp_parser_;
+  ESPFlowParser esp_parser_;
 
   // A periodic task to perform collection of flows.
   PeriodicTask collector_;
