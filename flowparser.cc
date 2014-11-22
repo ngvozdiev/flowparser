@@ -20,7 +20,7 @@ Status FlowParser::PcapOpen() {
                                   errbuf);
   }
 
-  if (pcap_handle_ == NULL) {
+  if (pcap_handle_ == nullptr) {
     return "Could not open source " + config_.source_ + ", pcap said: "
         + std::string(errbuf);
   }
@@ -76,6 +76,7 @@ Status FlowParser::HandleTcp(uint64_t timestamp, size_t size_ip,
     return "TCP header too short";
   }
 
+  UpdateFirstLastRx(timestamp);
   return tcp_parser_.HandlePkt(ip_header, *tcp_header, timestamp);
 }
 
@@ -84,6 +85,8 @@ Status FlowParser::HandleUdp(const uint64_t timestamp, size_t size_ip,
                              const uint8_t* pkt) {
   const pcap::SniffUdp* udp_header = reinterpret_cast<const pcap::SniffUdp*>(pkt
       + datalink_offset_ + size_ip);
+
+  UpdateFirstLastRx(timestamp);
   return udp_parser_.HandlePkt(ip_header, *udp_header, timestamp);
 }
 
@@ -92,15 +95,17 @@ Status FlowParser::HandleIcmp(const uint64_t timestamp, size_t size_ip,
                               const uint8_t* pkt) {
   const pcap::SniffIcmp* icmp_header =
       reinterpret_cast<const pcap::SniffIcmp*>(pkt + datalink_offset_ + size_ip);
+
+  UpdateFirstLastRx(timestamp);
   return icmp_parser_.HandlePkt(ip_header, *icmp_header, timestamp);
 }
 
-Status FlowParser::HandleEsp(const uint64_t timestamp, size_t size_ip,
-                             const pcap::SniffIp& ip_header,
-                             const uint8_t* pkt) {
-  const pcap::SniffEsp* esp_header = reinterpret_cast<const pcap::SniffEsp*>(pkt
-      + datalink_offset_ + size_ip);
-  return esp_parser_.HandlePkt(ip_header, *esp_header, timestamp);
+Status FlowParser::HandleUnknown(const uint64_t timestamp, size_t size_ip,
+                                 const pcap::SniffIp& ip_header) {
+  static pcap::SniffUnknown dummy_header;
+
+  UpdateFirstLastRx(timestamp);
+  return unknown_parser_.HandlePkt(ip_header, dummy_header, timestamp);
 }
 
 // Called to handle a single packet. Will dispatch it to HandleTcp or
@@ -151,18 +156,11 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
     return;
   }
 
-  if (ip_header->ip_p == IPPROTO_ESP) {
-    Status status = fparser->HandleEsp(timestamp, size_ip, *ip_header, packet);
-    if (!status.ok()) {
-      fparser->HandleBadStatus(status);
-    }
-
-    return;
+  // All other protocol go to unknown.
+  Status status = fparser->HandleUnknown(timestamp, size_ip, *ip_header);
+  if (!status.ok()) {
+    fparser->HandleBadStatus(status);
   }
-
-  fparser->HandleBadStatus(
-      "Tried to handle unknown protocol type: "
-          + std::to_string(ip_header->ip_p));
 }
 
 void FlowParser::PcapLoop() {

@@ -1,4 +1,6 @@
 #include <map>
+#include <array>
+#include <fstream>
 
 #include "../flowparser.h"
 
@@ -94,43 +96,90 @@ static void AddEmptyBins(BinArray* bins, uint64_t first_bin_start) {
   for (size_t i = 0; i < BinIndex::BIN_COUNT; ++i) {
     for (size_t bin_num = 0; bin_num < max_num_bins; ++bin_num) {
       uint64_t bin_start = kBinWidth * bin_num;
-      (*bins)[BinIndex::TOTAL][bin_start];
+      (*bins)[i][bin_start];
     }
   }
 }
 
-static Status RunTrace(const std::string& filename, uint64_t first_bin_start) {
-  std::array<Bin, 6> bins;
+// Writes out the bins to a CSV file, each bin type will have its own row and
+// the resulting matrix will have as many columns as buckets.
+static void DumpToFile(const BinArray& bins, const std::string& filename) {
+  std::ofstream out(filename);
 
+  for (size_t i = 0; i < BinIndex::BIN_COUNT; ++i) {
+    size_t num_bins = bins[i].size();
+    for (size_t bin_num = 0; bin_num < num_bins; ++bin_num) {
+      uint64_t bin_start = kBinWidth * bin_num;
+      out << bins[i].find(bin_start)->second;
+
+      if (bin_num != num_bins - 1) {
+        out << ",";
+      }
+    }
+
+    out << "\n";
+  }
+
+  out.close();
+}
+
+static Status RunTrace(const std::string& filename, BinArray* bins) {
   FlowParserConfig cfg;
+  flowparser::FlowParser* fp_ptr = nullptr;
+
   cfg.OfflineTrace(filename);
 
-  cfg.TCPCallback([&bins, first_bin_start]
+  cfg.TCPCallback([&bins, &fp_ptr]
   (const FlowKey& key, std::unique_ptr<flowparser::TCPFlow> flow) {
-    DoBin(key, first_bin_start, *flow, &bins);
+    DoBin(key, fp_ptr->first_rx(), *flow, bins);
   });
 
-  cfg.UDPCallback([&bins, first_bin_start]
+  cfg.UDPCallback([&bins, &fp_ptr]
   (const FlowKey& key, std::unique_ptr<flowparser::UDPFlow> flow) {
-    DoBin(key, first_bin_start, *flow, &bins);
+    DoBin(key, fp_ptr->first_rx(), *flow, bins);
   });
 
-  cfg.ICMPCallback([&bins, first_bin_start]
+  cfg.ICMPCallback([&bins, &fp_ptr]
   (const FlowKey& key, std::unique_ptr<flowparser::ICMPFlow> flow) {
-    DoBin(key, first_bin_start, *flow, &bins);
+    DoBin(key, fp_ptr->first_rx(), *flow, bins);
   });
 
-  cfg.ESPCallback([&bins, first_bin_start]
-  (const FlowKey& key, std::unique_ptr<flowparser::ESPFlow> flow) {
-    DoBin(key, first_bin_start, *flow, &bins);
+  cfg.UnknownCallback([&bins, &fp_ptr]
+  (const FlowKey& key, std::unique_ptr<flowparser::UnknownFlow> flow) {
+    DoBin(key, fp_ptr->first_rx(), *flow, bins);
   });
 
   flowparser::FlowParser fp(cfg);
-  return fp.RunTrace();
+  fp_ptr = &fp;
+
+  auto status = fp.RunTrace();
+  if (!status.ok()) {
+    return status;
+  }
+
+  AddEmptyBins(bins, fp.first_rx());
+  return Status::kStatusOK;
 }
 
 }  // namespace example
 
 int main(int argc, char *argv[]) {
+  example::BinArray bins;
 
+  if (argc != 2) {
+    std::cout << "Supply exactly one argument.\n";
+
+    return -1;
+  }
+
+  std::string filename(argv[1]);
+  Status status = example::RunTrace(filename, &bins);
+  if (!status.ok()) {
+    std::cout << "Non-ok status from trace: " << status.ToString() << "\n";
+
+    return -1;
+  }
+
+  example::DumpToFile(bins, filename + ".out");
+  return 0;
 }

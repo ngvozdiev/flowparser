@@ -8,16 +8,17 @@
 namespace flowparser {
 namespace test {
 
-// A fixture that sets up a single TCP parser with timeout of 1000. It also
-// creates a random IP header with src 1 and dst 2, and a random TCP header with
-// src port 5 and dst port 6.
-class ParserTestFixture : public ::testing::Test {
+// A fixture that sets up a single TCP parser. It also creates a random IP
+// header with src 1 and dst 2, and a random TCP header with src port 5 and
+// dst port 6.
+class ParserTestFixtureBase : public ::testing::Test {
  protected:
-  ParserTestFixture()
+  ParserTestFixtureBase(uint64_t timeout, uint64_t soft_mem_limit,
+                        uint64_t hard_mem_limit)
       : pkt_gen_(1),
         fp_([this](const FlowKey& key, std::unique_ptr<TCPFlow> flow)
         { flows_.push_back( {key, std::move(flow)});},
-            1000),
+            timeout, soft_mem_limit, hard_mem_limit),
         pcap_ip_hdr_(pkt_gen_.GenerateIpHeader(1, 2)),
         pcap_tcp_hdr_(pkt_gen_.GenerateTCPHeader(5, 6)) {
   }
@@ -28,6 +29,32 @@ class ParserTestFixture : public ::testing::Test {
 
   pcap::SniffIp pcap_ip_hdr_;
   pcap::SniffTcp pcap_tcp_hdr_;
+};
+
+// A parser with no memory limits and a timeout ot 1000.
+class ParserTestFixture : public ParserTestFixtureBase {
+ protected:
+  ParserTestFixture()
+      : ParserTestFixtureBase(1000, std::numeric_limits<uint64_t>::max(),
+                              std::numeric_limits<uint64_t>::max()) {
+  }
+};
+
+// A parser with memory limits set to 0.
+class NoMemParserTestFixture : public ParserTestFixtureBase {
+ protected:
+  NoMemParserTestFixture()
+      : ParserTestFixtureBase(1000, 0, 0) {
+  }
+};
+
+// A parser with memory limits set to [3/2 * sizeof(TCPFlow), inf].
+class LittleMemParserTestFixture : public ParserTestFixtureBase {
+ protected:
+  LittleMemParserTestFixture()
+      : ParserTestFixtureBase(1000, sizeof(TCPFlow) + sizeof(TCPFlow) / 2,
+                              std::numeric_limits<uint64_t>::max()) {
+  }
 };
 
 TEST_F(ParserTestFixture, Init) {
@@ -61,6 +88,20 @@ TEST_F(ParserTestFixture, SinglePacket) {
   ASSERT_EQ(6, key.dst_port());
 }
 
+TEST_F(NoMemParserTestFixture, SinglePacket) {
+  fp_.HandlePkt(pcap_ip_hdr_, pcap_tcp_hdr_, 10);
+
+  // The single flow should get collected now, since there is no memory for it.
+  fp_.CollectFlows();
+  ASSERT_EQ(1, flows_.size());
+
+  const FlowKey& key = flows_.at(0).first;
+  ASSERT_EQ(1, key.src());
+  ASSERT_EQ(2, key.dst());
+  ASSERT_EQ(5, key.src_port());
+  ASSERT_EQ(6, key.dst_port());
+}
+
 TEST_F(ParserTestFixture, TwoPacketsSameFlow) {
   fp_.HandlePkt(pcap_ip_hdr_, pcap_tcp_hdr_, 10);
   fp_.HandlePkt(pcap_ip_hdr_, pcap_tcp_hdr_, 910);
@@ -82,6 +123,22 @@ TEST_F(ParserTestFixture, TwoPacketsDiffFlowDiffIpSrc) {
   // The single flow still has not expired.
   fp_.CollectFlows();
   ASSERT_TRUE(flows_.empty());
+
+  fp_.CollectAllFlows();
+  ASSERT_EQ(2, flows_.size());
+}
+
+TEST_F(LittleMemParserTestFixture, TwoFlows) {
+  fp_.HandlePkt(pcap_ip_hdr_, pcap_tcp_hdr_, 10);
+
+  pcap_ip_hdr_.ip_src.s_addr = 10;
+  fp_.HandlePkt(pcap_ip_hdr_, pcap_tcp_hdr_, 910);
+
+  // One of the two flows should get collected now, as there is only room for
+  // one TCPFLow.
+  fp_.CollectFlows();
+  ASSERT_EQ(1, flows_.size());
+  ASSERT_EQ(1, flows_.at(0).first.src());
 
   fp_.CollectAllFlows();
   ASSERT_EQ(2, flows_.size());

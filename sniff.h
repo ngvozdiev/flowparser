@@ -33,16 +33,13 @@ static constexpr size_t kSizeUDP = 6;
 // ICMP minimum length
 static constexpr size_t kSizeICMP = ICMP_MINLEN;
 
-
 typedef ip SniffIp;
 typedef tcphdr SniffTcp;
 typedef udphdr SniffUdp;
 typedef icmp SniffIcmp;
 
-// Encapsulated secure payload.
-struct SniffEsp {
-  uint32_t spi;
-  uint32_t seq;
+// An empty dummy struct used when passing values to an unknown flow.
+struct SniffUnknown {
 };
 
 }  // namespace pcap

@@ -2,10 +2,35 @@
 
 namespace flowparser {
 
-template <typename T, typename P>
-Status Parser<T,P>::HandlePkt(const pcap::SniffIp& ip_header,
-                             const P& transport_header,
-                             uint64_t timestamp) {
+template<typename T, typename P>
+std::pair<uint64_t, uint64_t> Parser<T, P>::TotalMemAndDeltaRx() {
+  std::unique_lock<std::mutex> lock(flows_table_mutex_);
+
+  uint64_t mem_usage = 0;
+  uint64_t min_rx_time = last_rx_;
+
+  for (auto& key_and_value : flows_table_) {
+    FlowValue& flow_mutex_and_flow = key_and_value.second;
+    std::mutex& flow_mutex = flow_mutex_and_flow.first;
+    const auto& flow = flow_mutex_and_flow.second;
+
+    {
+      std::unique_lock<std::mutex> flow_lock(flow_mutex);
+
+      mem_usage += flow->SizeBytes();
+      uint64_t last_rx = flow->last_rx();
+      if (last_rx < min_rx_time) {
+        min_rx_time = last_rx;
+      }
+    }
+  }
+
+  return {mem_usage, last_rx_ - min_rx_time};
+}
+
+template<typename T, typename P>
+Status Parser<T, P>::HandlePkt(const pcap::SniffIp& ip_header,
+                               const P& transport_header, uint64_t timestamp) {
   FlowKey key(ip_header, transport_header);
 
   std::mutex* flow_mutex = nullptr;
@@ -46,9 +71,9 @@ Status Parser<T,P>::HandlePkt(const pcap::SniffIp& ip_header,
   return Status::kStatusOK;
 }
 
-template <typename T, typename P>
-void Parser<T,P>::PrivateCollectFlows(
-    std::function<bool(int64_t)> eval_for_collection) {
+template<typename T, typename P>
+void Parser<T, P>::PrivateCollectFlows(
+    std::function<bool(const T&)> eval_for_collection) {
   std::vector<std::pair<FlowKey, std::unique_ptr<T>>>flows_to_collect;
 
   // Lock the table mutex
@@ -66,8 +91,7 @@ void Parser<T,P>::PrivateCollectFlows(
         std::unique_lock<std::mutex> flow_lock(flow_mutex);
         flow->UpdateAverages();
 
-        int64_t time_left = flow->TimeLeft(last_rx_);
-        if (eval_for_collection(time_left)) {
+        if (eval_for_collection(*flow)) {
           flow->Deactivate();
           flows_to_collect.push_back( {it->first, std::move(flow)});
 
@@ -90,9 +114,9 @@ void Parser<T,P>::PrivateCollectFlows(
   }
 }
 
-template class Parser<TCPFlow, pcap::SniffTcp>;
-template class Parser<UDPFlow, pcap::SniffUdp>;
-template class Parser<ICMPFlow, pcap::SniffIcmp>;
-template class Parser<ESPFlow, pcap::SniffEsp>;
+template class Parser<TCPFlow, pcap::SniffTcp> ;
+template class Parser<UDPFlow, pcap::SniffUdp> ;
+template class Parser<ICMPFlow, pcap::SniffIcmp> ;
+template class Parser<UnknownFlow, pcap::SniffUnknown> ;
 
 }

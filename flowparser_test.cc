@@ -101,6 +101,18 @@ TEST_F(FlowParserFixture, BadFileOpen) {
   ASSERT_FALSE(fp.RunTrace().ok());
 }
 
+TEST_F(FlowParserFixture, FirstLastTimestamps) {
+  FlowParser fp(cfg_);
+  ASSERT_TRUE(fp.RunTrace().ok());
+  ASSERT_TRUE(bad_statuses_.empty());
+
+  uint64_t first_rx = fp.first_rx();
+  uint64_t last_rx = fp.last_rx();
+
+  ASSERT_EQ(first_rx, 1369832230607047UL);
+  ASSERT_EQ(last_rx, 1369832230644311UL);
+}
+
 // In test_data/ there is a pcap file with 10K anonymized packets from a
 // real-world trace. There is also a statistics file which lists the
 // conversations as reported by WireShark. In this test the file will be parsed
@@ -117,8 +129,9 @@ TEST_F(FlowParserFixture, EndToEnd) {
     AddToSummary(key, flow->GetInfo(), &map);});
   cfg_.ICMPCallback([&map](const FlowKey& key, unique_ptr<ICMPFlow> flow) {
     AddToSummary(key, flow->GetInfo(), &map);});
-  cfg_.ESPCallback([&map](const FlowKey& key, unique_ptr<ESPFlow> flow) {
-    AddToSummary(key, flow->GetInfo(), &map);});
+  cfg_.UnknownCallback(
+      [&map](const FlowKey& key, unique_ptr<UnknownFlow> flow) {
+        AddToSummary(key, flow->GetInfo(), &map);});
 
   FlowParser fp(cfg_);
   ASSERT_TRUE(fp.RunTrace().ok());
@@ -137,8 +150,9 @@ TEST_F(FlowParserFixture, IteratorPacketCount) {
     count += CountPkts(*flow);});
   cfg_.ICMPCallback([&count](const FlowKey& key, unique_ptr<ICMPFlow> flow) {
     count += CountPkts(*flow);});
-  cfg_.ESPCallback([&count](const FlowKey& key, unique_ptr<ESPFlow> flow) {
-    count += CountPkts(*flow);});
+  cfg_.UnknownCallback(
+      [&count](const FlowKey& key, unique_ptr<UnknownFlow> flow) {
+        count += CountPkts(*flow);});
 
   FlowParser fp(cfg_);
   ASSERT_TRUE(fp.RunTrace().ok());
@@ -171,8 +185,8 @@ TEST_F(FlowParserFixture, SingleTCPFlow) {
   inet_aton("71.126.3.230", &ip.ip_dst);
 
   pcap::SniffTcp tcp;
-  tcp.source = htons(80);
-  tcp.dest = htons(65470);
+  tcp.th_sport = htons(80);
+  tcp.th_dport = htons(65470);
 
   FlowKey key_model(ip, tcp);
 

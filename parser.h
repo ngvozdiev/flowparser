@@ -47,13 +47,14 @@ class FlowKey {
         dport_(0) {
   }
 
-  // For ESP the endpoints and the SPI is considered.
-  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffEsp& esp_header)
-        : src_(ip_header.ip_src.s_addr),
-          dst_(ip_header.ip_dst.s_addr),
-          sport_(esp_header.spi & 0x0000ffff),
-          dport_(esp_header.spi >> 16) {
-    }
+  // Unknown transport traffic session is between the same pair of endpoints.
+  FlowKey(const pcap::SniffIp& ip_header,
+          const pcap::SniffUnknown& unknown_header)
+      : src_(ip_header.ip_src.s_addr),
+        dst_(ip_header.ip_dst.s_addr),
+        sport_(0),
+        dport_(0) {
+  }
 
   bool operator==(const FlowKey &other) const {
     return (src_ == other.src_ && dst_ == other.dst_ && sport_ == other.sport_
@@ -120,8 +121,11 @@ class Parser {
  public:
   typedef function<void(const FlowKey&, unique_ptr<T>)> FlowCallback;
 
-  Parser(FlowCallback callback, uint64_t timeout)
+  Parser(FlowCallback callback, uint64_t timeout, uint64_t soft_mem_limit,
+         uint64_t hard_mem_limit)
       : flow_timeout_(timeout),
+        soft_mem_limit_(soft_mem_limit),
+        hard_mem_limit_(hard_mem_limit),
         last_rx_(0),
         callback_(callback) {
   }
@@ -132,21 +136,57 @@ class Parser {
 
   // Times out flows that have expired.
   void CollectFlows() {
-    PrivateCollectFlows([](int64_t time_left) {return time_left <= 0;});
+    auto mem_and_min_rx_time = TotalMemAndDeltaRx();
+    uint64_t total_mem = mem_and_min_rx_time.first;
+    uint64_t time_delta = mem_and_min_rx_time.second;
+
+    std::cout << "Total mem " << total_mem << " total flows " << flows_table_.size() << "\n";
+
+    if (total_mem < soft_mem_limit_) {
+      PrivateCollectFlows(
+          [this](const T& flow) {return flow.TimeLeft(last_rx_) <= 0;});
+    } else {
+      uint64_t hm = hard_mem_limit_;
+      if (total_mem > hard_mem_limit_) {
+        hm = total_mem;
+      }
+
+      double limit = (total_mem - soft_mem_limit_)
+          / static_cast<double>(hm - soft_mem_limit_);
+
+      PrivateCollectFlows([this, limit, time_delta](const T& flow)
+      {
+        // The idea is to time out a fraction of the flows that is proportional
+        // to how much out of memory we are, starting with the ones that have
+        // not seen traffic recently.
+          double timeout_fraction =
+          1 - (last_rx_ - flow.last_rx()) / static_cast<double>(time_delta);
+          if (time_delta == 0) {
+            timeout_fraction = 1;
+          }
+
+          return timeout_fraction <= limit;
+        });
+    }
   }
 
   // Times out all flow regardless of how close they are to expiring.
   void CollectAllFlows() {
-    PrivateCollectFlows([](int64_t time_left) {return true;});
+    PrivateCollectFlows([](const T&) {return true;});
   }
 
  private:
   typedef std::pair<std::mutex, std::unique_ptr<T>> FlowValue;
 
+  // Returns a tuple, the first element is the total amount of memory used by
+  // the parser and the second one is the maximum difference between the minimum
+  // last_rx_time among all flows and the parser's last_rx_time.
+  std::pair<uint64_t, uint64_t> TotalMemAndDeltaRx();
+
   // Performs a collection. Each flow is considered for collection based on an
   // evaluation function that is given the remaining amount of time that the
   // flow has until it expires.
-  void PrivateCollectFlows(std::function<bool(int64_t)> eval_for_collection);
+  void PrivateCollectFlows(std::function<bool(const T&)> eval_for_collection);
 
   // How long to wait before collecting flows. This is not in real time, but in
   // time measured as per pcap timestamps. This means that "time" has whatever
@@ -154,10 +194,18 @@ class Parser {
   // when packets are received.
   const uint64_t flow_timeout_;
 
+  // Below this threshold no flows are forcibly evicted - they are kept in
+  // memory until they time out.
+  const uint64_t soft_mem_limit_;
+
+  // Above the soft limit and up to the hard limit flows are progressively more
+  // likely to get forcibly evicted when a collection happens.
+  const uint64_t hard_mem_limit_;
+
   // Last time a packet was received.
   uint64_t last_rx_;
 
-  // A map to store TCP flows.
+  // A map to store flows.
   std::unordered_map<FlowKey, FlowValue, KeyHasher> flows_table_;
 
   // A mutex for the flows table.
@@ -172,7 +220,7 @@ class Parser {
 typedef Parser<TCPFlow, pcap::SniffTcp> TCPFlowParser;
 typedef Parser<UDPFlow, pcap::SniffUdp> UDPFlowParser;
 typedef Parser<ICMPFlow, pcap::SniffIcmp> ICMPFlowParser;
-typedef Parser<ESPFlow, pcap::SniffEsp> ESPFlowParser;
+typedef Parser<UnknownFlow, pcap::SniffUnknown> UnknownFlowParser;
 
 }
 

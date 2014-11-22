@@ -14,7 +14,7 @@ enum FlowType {
   TCP,
   UDP,
   ICMP,
-  ESP
+  UNKNONW
 };
 
 // A flow can be in one of two states - passive means that the flow has timed
@@ -94,6 +94,10 @@ class Flow {
     return (last_rx_time_ + timeout_) - time_now;
   }
 
+  uint64_t last_rx() const {
+    return last_rx_time_;
+  }
+
   FlowType type() const {
     return type_;
   }
@@ -102,7 +106,8 @@ class Flow {
   Flow(uint64_t timestamp, uint64_t timeout, FlowType type)
       : first_rx_time_(timestamp),
         timeout_(timeout),
-        type_(type), state_(FlowState::ACTIVE) {
+        type_(type),
+        state_(FlowState::ACTIVE) {
   }
 
   // Returns the sum of sizes of headers and timestamps stored. Does not include
@@ -208,6 +213,24 @@ class FlowIterator {
   RLEFieldIterator<uint8_t> ttl_it_;
 
   DISALLOW_COPY_AND_ASSIGN(FlowIterator);
+};
+
+// An unknown protocol. This is essentially just an IP header.
+class UnknownFlow : public Flow {
+ public:
+  UnknownFlow(uint64_t init_timestamp, uint64_t timeout)
+      : Flow::Flow(init_timestamp, timeout, FlowType::UNKNONW) {
+  }
+
+  size_t SizeBytes() {
+    return sizeof(UnknownFlow) + BaseSizeBytes();
+  }
+
+  Status PacketRx(const pcap::SniffIp& ip_header,
+                  const pcap::SniffUnknown& unknown_header,
+                  uint64_t timestamp) {
+    return BasePacketRx(ip_header, timestamp);
+  }
 };
 
 // A UDP flow is just an IP header. The src/dst port information is stored as
@@ -377,73 +400,6 @@ class ICMPFlowIterator {
   RLEFieldIterator<uint8_t> code_it_;
 
   DISALLOW_COPY_AND_ASSIGN(ICMPFlowIterator);
-};
-
-// ESP traffic is not uncommon on backbone links - hence it has its own flow
-// type.
-class ESPFlow : public Flow {
- public:
-  ESPFlow(uint64_t init_timestamp, uint64_t timeout)
-      : Flow::Flow(init_timestamp, timeout, FlowType::ESP) {
-  }
-
-  size_t SizeBytes() {
-    size_t return_size = sizeof(TCPFlow) + BaseSizeBytes();
-
-    return_size += header_spi_.SizeBytes();
-    return_size += header_seq_.SizeBytes();
-
-    return return_size;
-  }
-
-  Status PacketRx(const pcap::SniffIp& ip_header,
-                  const pcap::SniffEsp& esp_header, uint64_t timestamp) {
-    auto status = Flow::BasePacketRx(ip_header, timestamp);
-    if (!status.ok()) {
-      return status;
-    }
-
-    header_spi_.Append(ntohl(esp_header.spi));
-    header_seq_.Append(ntohl(esp_header.seq));
-
-    return Status::kStatusOK;
-  }
-
- private:
-  // TCP flag fields of seen packets.
-  RLEField<uint32_t> header_spi_;
-
-  // TCP flag fields of seen packets.
-  RLEField<uint32_t> header_seq_;
-
-  friend class ESPFlowIterator;
-};
-
-class ESPFlowIterator {
- public:
-  ESPFlowIterator(const ESPFlow& parent)
-      : flow_it_(parent),  // Intentional slicing
-        spi_it_(parent.header_spi_),
-        seq_it_(parent.header_seq_) {
-  }
-
-  bool Next(IPHeader* ip_header, ESPHeader* esp_header) {
-    if (!flow_it_.Next(ip_header)) {
-      return false;
-    }
-
-    spi_it_.Next(&esp_header->spi);
-    seq_it_.Next(&esp_header->seq);
-
-    return true;
-  }
-
- private:
-  FlowIterator flow_it_;
-  RLEFieldIterator<uint32_t> spi_it_;
-  RLEFieldIterator<uint32_t> seq_it_;
-
-  DISALLOW_COPY_AND_ASSIGN(ESPFlowIterator);
 };
 
 }

@@ -1,6 +1,8 @@
 #ifndef FLOWPARSER_FLOWPARSER_H
 #define FLOWPARSER_FLOWPARSER_H
 
+#include <atomic>
+
 #include "sniff.h"
 #include "parser.h"
 #include "periodic_runner.h"
@@ -15,7 +17,9 @@ class FlowParserConfig {
       : offline_(false),
         snapshot_len_(100),
         bpf_filter_("ip"),
-        flow_timeout_(2 * 60 * kMillion) {
+        flow_timeout_(2 * 60 * kMillion),
+        soft_mem_limit_(1 << 27),
+        hard_mem_limit_(1 << 28) {
   }
 
   void OfflineTrace(const std::string& filename) {
@@ -40,8 +44,8 @@ class FlowParserConfig {
     icmp_callback_ = icmp_callback;
   }
 
-  void ESPCallback(ESPFlowParser::FlowCallback esp_callback) {
-    esp_callback_ = esp_callback;
+  void UnknownCallback(UnknownFlowParser::FlowCallback unknown_callback) {
+    unknown_callback_ = unknown_callback;
   }
 
   void BadStatusCallback(std::function<void(Status status)> status_callback) {
@@ -50,6 +54,11 @@ class FlowParserConfig {
 
   void InfoCallback(std::function<void(const std::string&)> info_callback) {
     info_callback_ = info_callback;
+  }
+
+  void MemoryLimits(uint64_t soft, uint64_t hard) {
+    soft_mem_limit_ = soft;
+    hard_mem_limit_ = hard;
   }
 
  private:
@@ -70,6 +79,12 @@ class FlowParserConfig {
   // This is in whatever precision pcap provides (microseconds by default).
   // The default value is 2min.
   uint64_t flow_timeout_;
+
+  // The soft memory limit. Look at comment in parser.h for description.
+  uint64_t soft_mem_limit_;
+
+  // The hard memory limit. Look at comment in parser.h for description.
+  uint64_t hard_mem_limit_;
 
   // A function that will be called when a failure during packet capture occurs.
   // By default will print the error to stdout.
@@ -94,8 +109,8 @@ class FlowParserConfig {
       [](const FlowKey&, unique_ptr<ICMPFlow>) {};
 
   // A callback for ESP flows.
-  ESPFlowParser::FlowCallback esp_callback_ =
-      [](const FlowKey&, unique_ptr<ESPFlow>) {};
+  UnknownFlowParser::FlowCallback unknown_callback_ =
+      [](const FlowKey&, unique_ptr<UnknownFlow>) {};
 
   friend class FlowParser;
 };
@@ -104,13 +119,25 @@ class FlowParser {
  public:
   FlowParser(const FlowParserConfig& config)
       : config_(config),
+        first_rx_(0),
+        last_rx_(0),
         pcap_handle_(nullptr),
         datalink_offset_(0),
-        tcp_parser_(config.tcp_callback_, config_.flow_timeout_),
-        udp_parser_(config.udp_callback_, config_.flow_timeout_),
-        icmp_parser_(config.icmp_callback_, config_.flow_timeout_),
-        esp_parser_(config.esp_callback_, config_.flow_timeout_),
+        tcp_parser_(config.tcp_callback_, config_.flow_timeout_,
+                    config.soft_mem_limit_, config.hard_mem_limit_),
+        udp_parser_(config.udp_callback_, config_.flow_timeout_,
+                    config.soft_mem_limit_, config.hard_mem_limit_),
+        icmp_parser_(config.icmp_callback_, config_.flow_timeout_,
+                     config.soft_mem_limit_, config.hard_mem_limit_),
+        unknown_parser_(config.unknown_callback_, config_.flow_timeout_,
+                        config.soft_mem_limit_, config.hard_mem_limit_),
         collector_([this] {CollectAll();}, std::chrono::milliseconds(1000)) {
+  }
+
+  ~FlowParser() {
+    if (pcap_handle_ != nullptr) {
+      pcap_close(pcap_handle_);
+    }
   }
 
   // Handles a single TCP packet. This function will do the appropriate casting
@@ -126,12 +153,22 @@ class FlowParser {
   Status HandleIcmp(const uint64_t timestamp, size_t size_ip,
                     const pcap::SniffIp& ip_header, const uint8_t* pkt);
 
-  // Handles a single ESP packet.
-  Status HandleEsp(const uint64_t timestamp, size_t size_ip,
-                   const pcap::SniffIp& ip_header, const uint8_t* pkt);
+  // Handles a single packet from an unknown transport protocol.
+  Status HandleUnknown(const uint64_t timestamp, size_t size_ip,
+                       const pcap::SniffIp& ip_header);
 
   size_t datalink_offset() const {
     return datalink_offset_;
+  }
+
+  // The timestamp of the first packet seen by the flowparser.
+  uint64_t first_rx() const {
+    return first_rx_.load();
+  }
+
+  // The timestamp of the last packet seen by the flowparser.
+  uint64_t last_rx() const {
+    return last_rx_.load();
   }
 
   // Called to handle a bad Status that needs to be forwarded to the client of
@@ -154,7 +191,7 @@ class FlowParser {
     tcp_parser_.CollectAllFlows();
     udp_parser_.CollectAllFlows();
     icmp_parser_.CollectAllFlows();
-    esp_parser_.CollectAllFlows();
+    unknown_parser_.CollectAllFlows();
 
     return Status::kStatusOK;
   }
@@ -173,8 +210,24 @@ class FlowParser {
     tcp_parser_.CollectFlows();
     udp_parser_.CollectFlows();
     icmp_parser_.CollectFlows();
-    esp_parser_.CollectFlows();
+    unknown_parser_.CollectFlows();
   }
+
+  // Updates the first and the last rx times.
+  void UpdateFirstLastRx(uint64_t timestamp) {
+    // Since we just want to update a couple of counters using mutexes would be
+    // heavy-handed. Instead we can use a couple of CAS operations.
+
+    uint64_t tmp = 0;
+    std::atomic_compare_exchange_strong(&first_rx_, &tmp, timestamp);
+    std::atomic_exchange(&last_rx_, timestamp);
+  }
+
+  // The first time a packet was received at any parser.
+  std::atomic<uint64_t> first_rx_;
+
+  // The most recent time a packet was received at any parser.
+  std::atomic<uint64_t> last_rx_;
 
   // A raw pointer to pcap. Will be cleaned up in destructor.
   pcap_t* pcap_handle_;
@@ -186,7 +239,7 @@ class FlowParser {
   TCPFlowParser tcp_parser_;
   UDPFlowParser udp_parser_;
   ICMPFlowParser icmp_parser_;
-  ESPFlowParser esp_parser_;
+  UnknownFlowParser unknown_parser_;
 
   // A periodic task to perform collection of flows.
   PeriodicTask collector_;

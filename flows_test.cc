@@ -37,8 +37,8 @@ TEST(Flows, Type) {
   ICMPFlow icmp_flow(kInitTimestamp, kDefaultTimeout);
   ASSERT_EQ(FlowType::ICMP, icmp_flow.type());
 
-  ESPFlow esp_flow(kInitTimestamp, kDefaultTimeout);
-  ASSERT_EQ(FlowType::ESP, esp_flow.type());
+  UnknownFlow unknown_flow(kInitTimestamp, kDefaultTimeout);
+  ASSERT_EQ(FlowType::UNKNONW, unknown_flow.type());
 }
 
 TEST(Flows, InfoAvgNoPkts) {
