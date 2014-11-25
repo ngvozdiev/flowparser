@@ -8,6 +8,11 @@
 #include <iostream>
 #include <chrono>
 
+// Used to silence unused parameter warnings from the compiler.
+template <typename T>
+void ignore(T &&)
+{ }
+
 // make_unique "lifted" from C++14.
 namespace std {
 template<class T> struct _Unique_if {

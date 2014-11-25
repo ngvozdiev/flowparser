@@ -24,6 +24,13 @@ static std::string IPToString(uint32_t ip) {
 // separate map.
 class FlowKey {
  public:
+  FlowKey(const FlowKey& other)
+      : src_(other.src_),
+        dst_(other.dst_),
+        sport_(other.sport_),
+        dport_(other.dport_) {
+  }
+
   FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header)
       : src_(ip_header.ip_src.s_addr),
         dst_(ip_header.ip_dst.s_addr),
@@ -45,6 +52,7 @@ class FlowKey {
         dst_(ip_header.ip_dst.s_addr),
         sport_(0),
         dport_(0) {
+    ignore(icmp_header);
   }
 
   // Unknown transport traffic session is between the same pair of endpoints.
@@ -54,6 +62,7 @@ class FlowKey {
         dst_(ip_header.ip_dst.s_addr),
         sport_(0),
         dport_(0) {
+    ignore(unknown_header);
   }
 
   bool operator==(const FlowKey &other) const {
@@ -75,6 +84,16 @@ class FlowKey {
   // The destination IP address of the flow (in host byte order)
   uint32_t dst() const {
     return ntohl(dst_);
+  }
+
+  // A string representation of the source address.
+  std::string SrcToString() const {
+    return IPToString(src_);
+  }
+
+  // A string representation of the destination address.
+  std::string DstToString() const {
+    return IPToString(dst_);
   }
 
   // The source port of the flow (in host byte order)
@@ -140,7 +159,8 @@ class Parser {
     uint64_t total_mem = mem_and_min_rx_time.first;
     uint64_t time_delta = mem_and_min_rx_time.second;
 
-    std::cout << "Total mem " << total_mem << " total flows " << flows_table_.size() << "\n";
+    std::cout << "Total mem " << total_mem << " total flows "
+        << flows_table_.size() << "\n";
 
     if (total_mem < soft_mem_limit_) {
       PrivateCollectFlows(

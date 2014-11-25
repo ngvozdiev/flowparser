@@ -229,6 +229,8 @@ class UnknownFlow : public Flow {
   Status PacketRx(const pcap::SniffIp& ip_header,
                   const pcap::SniffUnknown& unknown_header,
                   uint64_t timestamp) {
+    ignore(unknown_header);
+
     return BasePacketRx(ip_header, timestamp);
   }
 };
@@ -247,6 +249,8 @@ class UDPFlow : public Flow {
 
   Status PacketRx(const pcap::SniffIp& ip_header,
                   const pcap::SniffUdp& udp_header, uint64_t timestamp) {
+    ignore(udp_header);
+
     return BasePacketRx(ip_header, timestamp);
   }
 };

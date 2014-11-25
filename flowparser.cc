@@ -100,7 +100,7 @@ Status FlowParser::HandleIcmp(const uint64_t timestamp, size_t size_ip,
   return icmp_parser_.HandlePkt(ip_header, *icmp_header, timestamp);
 }
 
-Status FlowParser::HandleUnknown(const uint64_t timestamp, size_t size_ip,
+Status FlowParser::HandleUnknown(const uint64_t timestamp,
                                  const pcap::SniffIp& ip_header) {
   static pcap::SniffUnknown dummy_header;
 
@@ -157,7 +157,7 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
   }
 
   // All other protocol go to unknown.
-  Status status = fparser->HandleUnknown(timestamp, size_ip, *ip_header);
+  Status status = fparser->HandleUnknown(timestamp, *ip_header);
   if (!status.ok()) {
     fparser->HandleBadStatus(status);
   }

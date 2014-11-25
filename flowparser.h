@@ -154,7 +154,7 @@ class FlowParser {
                     const pcap::SniffIp& ip_header, const uint8_t* pkt);
 
   // Handles a single packet from an unknown transport protocol.
-  Status HandleUnknown(const uint64_t timestamp, size_t size_ip,
+  Status HandleUnknown(const uint64_t timestamp,
                        const pcap::SniffIp& ip_header);
 
   size_t datalink_offset() const {
