@@ -331,6 +331,11 @@ static PyObject* PythonFlowParserNew(PyTypeObject *type, PyObject *args,
     return nullptr;
   }
 
+  if (hard_mem_limit_mb > 0 && soft_mem_limit_mb < 0) {
+    PyErr_SetString(PyExc_TypeError, "Bad memory limits");
+    return nullptr;
+  }
+
   self = (PythonFlowParser*) type->tp_alloc(type, 0);
 
   Py_INCREF(flow_callback);

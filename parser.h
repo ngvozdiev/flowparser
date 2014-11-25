@@ -193,8 +193,6 @@ class Parser {
   }
 
  private:
-  typedef std::pair<std::mutex, std::unique_ptr<T>> FlowValue;
-
   // Returns a tuple, the first element is the total amount of memory used by
   // the parser and the second one is the maximum difference between the minimum
   // last_rx_time among all flows and the parser's last_rx_time.
@@ -223,7 +221,7 @@ class Parser {
   uint64_t last_rx_;
 
   // A map to store flows.
-  std::unordered_map<FlowKey, FlowValue, KeyHasher> flows_table_;
+  std::unordered_map<FlowKey, std::unique_ptr<T>, KeyHasher> flows_table_;
 
   // A mutex for the flows table.
   std::mutex flows_table_mutex_;
