@@ -114,6 +114,10 @@ struct PythonTCPFlow {
 
 // Frees a PythonTCPFlow
 static void PythonTCPFlowDealloc(PythonTCPFlow* fparser_flow) {
+  fparser_flow->it.~unique_ptr();
+  fparser_flow->flow.~unique_ptr();
+  fparser_flow->key.~unique_ptr();
+
   fparser_flow->ob_type->tp_free((PyObject *) fparser_flow);
 }
 
@@ -213,10 +217,11 @@ static PythonTCPFlow* FromTCPFlow(const FlowKey& key,
   }
 
   py_flow->size_pkts = flow->GetInfo().size_pkts;
-  py_flow->flow = std::move(flow);
-  py_flow->key = std::make_unique<FlowKey>(key);
+  new (&py_flow->flow) std::unique_ptr<const TCPFlow>(std::move(flow));
+  new (&py_flow->key) std::unique_ptr<const FlowKey>(new FlowKey(key));
+  new (&py_flow->it) std::unique_ptr<TCPFlowIterator>(
+      new TCPFlowIterator(*py_flow->flow));
 
-  py_flow->it = std::make_unique<TCPFlowIterator>(*py_flow->flow);
   return py_flow;
 }
 
@@ -255,8 +260,8 @@ static void OffloadFlowToCallback(PythonFlowParser* py_parser,
 
   PyObject* python_flow_key = flow_key::FromFlowKey(key);
   if (python_flow_key == nullptr) {
-      return;
-    }
+    return;
+  }
 
   d_gstate = PyGILState_Ensure();
 
@@ -304,7 +309,7 @@ static PyObject* PythonFlowParserNew(PyTypeObject *type, PyObject *args,
   static char* argnames[] = { "source", "flow_callback", "is_file", "filter",
       "soft_mem_limit", "hard_mem_limit", "error_callback", nullptr };
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|isiiOO", argnames, &source,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|isiiO", argnames, &source,
                                    &flow_callback, &is_file, &filter,
                                    &soft_mem_limit_mb, &hard_mem_limit_mb,
                                    &error_callback)) {
@@ -461,7 +466,7 @@ PyMODINIT_FUNC initfparser(void) {
   }
 
   Py_INCREF(&python_flow_parser_type);
-  PyModule_AddObject(m, "FParser", (PyObject*) &python_flow_parser_type);
+  PyModule_AddObject(m, "FlowParser", (PyObject*) &python_flow_parser_type);
 
   Py_INCREF(&python_tcp_flow_type);
   PyModule_AddObject(m, "TCPFlow", (PyObject *) &python_tcp_flow_type);

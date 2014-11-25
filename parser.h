@@ -159,9 +159,6 @@ class Parser {
     uint64_t total_mem = mem_and_min_rx_time.first;
     uint64_t time_delta = mem_and_min_rx_time.second;
 
-    std::cout << "Total mem " << total_mem << " total flows "
-        << flows_table_.size() << "\n";
-
     if (total_mem < soft_mem_limit_) {
       PrivateCollectFlows(
           [this](const T& flow) {return flow.TimeLeft(last_rx_) <= 0;});
