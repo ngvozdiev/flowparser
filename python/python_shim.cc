@@ -23,7 +23,7 @@ namespace flow_key {
 static PyTypeObject fparser_flow_key_ntuple_type = { 0, 0, 0, 0, 0, 0 };
 static PyStructSequence_Field flow_key_ntuple_fields[] = { { "src",
     "The source IP address of the flow" }, { "sport",
-    "The source port of the transport header of the flow" }, { "dest",
+    "The source port of the transport header of the flow" }, { "dst",
     "The destination IP address of the flow" }, { "dport",
     "The dest port of the transport header of the flow" }, { nullptr } };
 
@@ -53,8 +53,8 @@ namespace header {
 
 static PyTypeObject fparser_ip_hdr_ntuple_type = { 0, 0, 0, 0, 0, 0 };
 static PyStructSequence_Field ip_hdr_ntuple_fields[] = { { "timestamp",
-    "PCAP timestamp" }, { "ttl", "TTL value" }, { "len", "IP length" }, { "id",
-    "IP id" }, { nullptr } };
+    "PCAP timestamp" }, { "ttl", "TTL value" }, { "length", "IP length" }, {
+    "id", "IP id" }, { nullptr } };
 
 static PyStructSequence_Desc ip_hdr_ntuple_desc = { "fparser.IPHeader", nullptr,
     ip_hdr_ntuple_fields, 4 };
@@ -90,6 +90,23 @@ static PyObject* FromHeader(const IPHeader& ip, const TCPHeader& tcp) {
   return ntuple;
 }
 
+static PyTypeObject fparser_icmp_hdr_ntuple_type = { 0, 0, 0, 0, 0, 0 };
+static PyStructSequence_Field icmp_hdr_ntuple_fields[] = {
+    { "ip", "IP header" }, { "type", "ICMP type" }, { "code", "ICMP code" }, {
+        nullptr } };
+
+static PyStructSequence_Desc icmp_hdr_ntuple_desc = { "fparser.ICMPHeader",
+    nullptr, icmp_hdr_ntuple_fields, 3 };
+
+static PyObject* FromHeader(const IPHeader& ip, const ICMPHeader& icmp) {
+  PyObject* ntuple = PyStructSequence_New(&fparser_icmp_hdr_ntuple_type);
+  PyStructSequence_SET_ITEM(ntuple, 0, FromHeader(ip));
+  PyStructSequence_SET_ITEM(ntuple, 1, PyInt_FromLong(icmp.type));
+  PyStructSequence_SET_ITEM(ntuple, 2, PyInt_FromLong(icmp.code));
+
+  return ntuple;
+}
+
 }  // namespace header
 
 // All members of this namespace are templatized for the different flow types.
@@ -109,9 +126,19 @@ struct PythonFlow {
 };
 
 typedef PythonFlow<TCPFlow, TCPFlowIterator> PythonTCPFlow;
+typedef PythonFlow<UDPFlow, FlowIterator> PythonUDPFlow;
+typedef PythonFlow<ICMPFlow, ICMPFlowIterator> PythonICMPFlow;
+typedef PythonFlow<UnknownFlow, FlowIterator> PythonUnknownFlow;
+
+// The flow's iterator is just the flow object itself - the it field is
+// populated with the most recent iterator.
+static PyObject* PythonFlowIter(PyObject* self) {
+  Py_INCREF(self);
+  return self;
+}
 
 // A wrapper class that has only static methods
-template<typename T, typename H, typename I>
+template<typename T>
 class StaticWrapper {
  public:
   // Frees a PythonTCPFlow
@@ -136,46 +163,88 @@ class StaticWrapper {
     const T* py_flow = (T*) self;
     return (Py_ssize_t) py_flow->size_pkts;
   }
-
-  // Gets the next object from the iterator, or raises a StopIteration exception
-  // and resets the iterator.
-  static PyObject* PythonFlowIternext(PyObject* self) {
-    T* py_flow = (T*) self;
-
-    IPHeader ip_header;
-    H transport_header;
-    bool has_more = py_flow->it->Next(&ip_header, &transport_header);
-    if (!has_more) {
-      py_flow->it = std::make_unique<I>(*py_flow->flow);
-      PyErr_SetNone(PyExc_StopIteration);
-      return nullptr;
-    }
-
-    return header::FromHeader(ip_header, transport_header);
-  }
 };
 
-typedef StaticWrapper<PythonTCPFlow, TCPHeader, TCPFlowIterator> TCPMethods;
+typedef StaticWrapper<PythonTCPFlow> TCPMethods;
+typedef StaticWrapper<PythonUDPFlow> UDPMethods;
+typedef StaticWrapper<PythonICMPFlow> ICMPMethods;
+typedef StaticWrapper<PythonUnknownFlow> UnknownMethods;
 
-// The flow's iterator is just the flow object itself - the it field is
-// populated with the most recent iterator.
-static PyObject* PythonFlowIter(PyObject* self) {
-  Py_INCREF(self);
-  return self;
+// Gets the next object from the iterator, or raises a StopIteration exception
+// and resets the iterator.
+template<typename T, typename H, typename I>
+static PyObject* PythonFlowIternext(PyObject* self) {
+  T* py_flow = (T*) self;
+
+  IPHeader ip_header = { };
+  H transport_header = { };
+  bool has_more = py_flow->it->Next(&ip_header, &transport_header);
+  if (!has_more) {
+    py_flow->it = std::make_unique<I>(*py_flow->flow);
+    PyErr_SetNone(PyExc_StopIteration);
+    return nullptr;
+  }
+
+  return header::FromHeader(ip_header, transport_header);
 }
 
-// The methods of a PythonTCPFlow object.
-static PyMethodDef python_tcp_flow_methods[] = { { "get_id",
-    (PyCFunction) TCPMethods::PythonFlowGetId, METH_NOARGS,
-    "Returns (source ip, source port, dest ip, dest port)" }, { nullptr } };
+const auto& PythonTCPFlowIternext = PythonFlowIternext<PythonTCPFlow, TCPHeader,
+    TCPFlowIterator>;
+const auto& PythonICMPFlowIternext = PythonFlowIternext<PythonICMPFlow,
+    ICMPHeader, ICMPFlowIterator>;
 
-// A PythonTCPFlow is also a sequence of its packets - it needs to have a
-// length.
-static PySequenceMethods python_tcp_flow_sequence_methods = {
+template<typename T>
+static PyObject* PythonFlowNoTransportIternext(PyObject* self) {
+  T* py_flow = (T*) self;
+
+  IPHeader ip_header = { };
+  bool has_more = py_flow->it->Next(&ip_header);
+  if (!has_more) {
+    py_flow->it = std::make_unique<FlowIterator>(*py_flow->flow);
+    PyErr_SetNone(PyExc_StopIteration);
+    return nullptr;
+  }
+
+  return header::FromHeader(ip_header);
+}
+
+const auto& PythonUDPFlowIternext = PythonFlowNoTransportIternext<PythonUDPFlow>;
+const auto& PythonUnknownFlowIternext = PythonFlowNoTransportIternext<
+    PythonUnknownFlow>;
+
+PyMethodDef python_tcp_flow_methods[] = { { "get_id",
+    (PyCFunction) TCPMethods::PythonFlowGetId, METH_NOARGS,
+    "Returns the flow's id" }, { nullptr } };
+
+PySequenceMethods python_tcp_flow_sequence_methods = {
     TCPMethods::PythonFlowGetLen, /* sq_length */
 };
 
-// Boilerplae for the type.
+PyMethodDef python_udp_flow_methods[] = { { "get_id",
+    (PyCFunction) UDPMethods::PythonFlowGetId, METH_NOARGS,
+    "Returns the flow's id" }, { nullptr } };
+
+PySequenceMethods python_udp_flow_sequence_methods = {
+    UDPMethods::PythonFlowGetLen, /* sq_length */
+};
+
+PyMethodDef python_icmp_flow_methods[] = { { "get_id",
+    (PyCFunction) ICMPMethods::PythonFlowGetId, METH_NOARGS,
+    "Returns the flow's id" }, { nullptr } };
+
+PySequenceMethods python_icmp_flow_sequence_methods = {
+    ICMPMethods::PythonFlowGetLen, /* sq_length */
+};
+
+PyMethodDef python_unknown_flow_methods[] = { { "get_id",
+    (PyCFunction) UnknownMethods::PythonFlowGetId, METH_NOARGS,
+    "Returns the flow's id" }, { nullptr } };
+
+PySequenceMethods python_unknown_flow_sequence_methods = {
+    UnknownMethods::PythonFlowGetLen, /* sq_length */
+};
+
+// Boilerplate for the type.
 PyTypeObject python_tcp_flow_type = { PyObject_HEAD_INIT(nullptr) 0, /*ob_size*/
 "fparser.TCPFlow", /*tp_name*/
 sizeof(PythonTCPFlow), /*tp_basicsize*/
@@ -204,8 +273,104 @@ Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER,
 0, /* tp_richcompare */
 0, /* tp_weaklistoffset */
 PythonFlowIter, /* tp_iter: __iter__() method */
-TCPMethods::PythonFlowIternext, /* tp_iternext: next() method */
-python_tcp_flow_methods /* tp_methods */
+PythonTCPFlowIternext, /* tp_iternext: next() method */
+(PyMethodDef*) python_tcp_flow_methods /* tp_methods */
+};
+
+PyTypeObject python_udp_flow_type = { PyObject_HEAD_INIT(nullptr) 0, /*ob_size*/
+"fparser.UDPFlow", /*tp_name*/
+sizeof(PythonUDPFlow), /*tp_basicsize*/
+0, /*tp_itemsize*/
+(destructor) UDPMethods::PythonFlowDealloc, /*tp_dealloc*/
+0, /*tp_print*/
+0, /*tp_getattr*/
+0, /*tp_setattr*/
+0, /*tp_compare*/
+0, /*tp_repr*/
+0, /*tp_as_number*/
+&python_udp_flow_sequence_methods, /*tp_as_sequence*/
+0, /*tp_as_mapping*/
+0, /*tp_hash */
+0, /*tp_call*/
+0, /*tp_str*/
+0, /*tp_getattro*/
+0, /*tp_setattro*/
+0, /*tp_as_buffer*/
+Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER,
+/* tp_flags: Py_TPFLAGS_HAVE_ITER tells python to
+ use tp_iter and tp_iternext fields. */
+"Internal fparser UDP flow object.", /* tp_doc */
+0, /* tp_traverse */
+0, /* tp_clear */
+0, /* tp_richcompare */
+0, /* tp_weaklistoffset */
+PythonFlowIter, /* tp_iter: __iter__() method */
+PythonUDPFlowIternext, /* tp_iternext: next() method */
+(PyMethodDef*) python_udp_flow_methods /* tp_methods */
+};
+
+PyTypeObject python_icmp_flow_type = { PyObject_HEAD_INIT(nullptr) 0, /*ob_size*/
+"fparser.ICMPFlow", /*tp_name*/
+sizeof(PythonICMPFlow), /*tp_basicsize*/
+0, /*tp_itemsize*/
+(destructor) ICMPMethods::PythonFlowDealloc, /*tp_dealloc*/
+0, /*tp_print*/
+0, /*tp_getattr*/
+0, /*tp_setattr*/
+0, /*tp_compare*/
+0, /*tp_repr*/
+0, /*tp_as_number*/
+&python_icmp_flow_sequence_methods, /*tp_as_sequence*/
+0, /*tp_as_mapping*/
+0, /*tp_hash */
+0, /*tp_call*/
+0, /*tp_str*/
+0, /*tp_getattro*/
+0, /*tp_setattro*/
+0, /*tp_as_buffer*/
+Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER,
+/* tp_flags: Py_TPFLAGS_HAVE_ITER tells python to
+ use tp_iter and tp_iternext fields. */
+"Internal fparser ICMP flow object.", /* tp_doc */
+0, /* tp_traverse */
+0, /* tp_clear */
+0, /* tp_richcompare */
+0, /* tp_weaklistoffset */
+PythonFlowIter, /* tp_iter: __iter__() method */
+PythonICMPFlowIternext, /* tp_iternext: next() method */
+(PyMethodDef*) python_icmp_flow_methods /* tp_methods */
+};
+
+PyTypeObject python_unknown_flow_type = { PyObject_HEAD_INIT(nullptr) 0, /*ob_size*/
+"fparser.UnknownFlow", /*tp_name*/
+sizeof(PythonUnknownFlow), /*tp_basicsize*/
+0, /*tp_itemsize*/
+(destructor) UnknownMethods::PythonFlowDealloc, /*tp_dealloc*/
+0, /*tp_print*/
+0, /*tp_getattr*/
+0, /*tp_setattr*/
+0, /*tp_compare*/
+0, /*tp_repr*/
+0, /*tp_as_number*/
+&python_unknown_flow_sequence_methods, /*tp_as_sequence*/
+0, /*tp_as_mapping*/
+0, /*tp_hash */
+0, /*tp_call*/
+0, /*tp_str*/
+0, /*tp_getattro*/
+0, /*tp_setattro*/
+0, /*tp_as_buffer*/
+Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER,
+/* tp_flags: Py_TPFLAGS_HAVE_ITER tells python to
+ use tp_iter and tp_iternext fields. */
+"Internal fparser UNKNOWN flow object.", /* tp_doc */
+0, /* tp_traverse */
+0, /* tp_clear */
+0, /* tp_richcompare */
+0, /* tp_weaklistoffset */
+PythonFlowIter, /* tp_iter: __iter__() method */
+PythonUnknownFlowIternext, /* tp_iternext: next() method */
+(PyMethodDef*) python_unknown_flow_methods /* tp_methods */
 };
 
 // Constructs a new PythonTCPFlow from a combination of a FlowKey and a TCPFlow.
@@ -226,6 +391,62 @@ static PythonTCPFlow* FromTCPFlow(const FlowKey& key,
   new (&py_flow->key) std::unique_ptr<const FlowKey>(new FlowKey(key));
   new (&py_flow->it) std::unique_ptr<TCPFlowIterator>(
       new TCPFlowIterator(*py_flow->flow));
+
+  return py_flow;
+}
+
+static PythonUDPFlow* FromUDPFlow(const FlowKey& key,
+                                  std::unique_ptr<UDPFlow> flow) {
+  PythonUDPFlow* py_flow;
+
+  py_flow = PyObject_New(PythonUDPFlow, (PyTypeObject* ) &python_udp_flow_type);
+  if (!py_flow) {
+    return nullptr;
+  }
+
+  py_flow->size_pkts = flow->GetInfo().size_pkts;
+  new (&py_flow->flow) std::unique_ptr<const UDPFlow>(std::move(flow));
+  new (&py_flow->key) std::unique_ptr<const FlowKey>(new FlowKey(key));
+  new (&py_flow->it) std::unique_ptr<FlowIterator>(
+      new FlowIterator(*py_flow->flow));
+
+  return py_flow;
+}
+
+static PythonICMPFlow* FromICMPFlow(const FlowKey& key,
+                                    std::unique_ptr<ICMPFlow> flow) {
+  PythonICMPFlow* py_flow;
+
+  py_flow = PyObject_New(PythonICMPFlow,
+                         (PyTypeObject* ) &python_icmp_flow_type);
+  if (!py_flow) {
+    return nullptr;
+  }
+
+  py_flow->size_pkts = flow->GetInfo().size_pkts;
+  new (&py_flow->flow) std::unique_ptr<const ICMPFlow>(std::move(flow));
+  new (&py_flow->key) std::unique_ptr<const FlowKey>(new FlowKey(key));
+  new (&py_flow->it) std::unique_ptr<ICMPFlowIterator>(
+      new ICMPFlowIterator(*py_flow->flow));
+
+  return py_flow;
+}
+
+static PythonUnknownFlow* FromUnknownFlow(const FlowKey& key,
+                                          std::unique_ptr<UnknownFlow> flow) {
+  PythonUnknownFlow* py_flow;
+
+  py_flow = PyObject_New(PythonUnknownFlow,
+                         (PyTypeObject* ) &python_unknown_flow_type);
+  if (!py_flow) {
+    return nullptr;
+  }
+
+  py_flow->size_pkts = flow->GetInfo().size_pkts;
+  new (&py_flow->flow) std::unique_ptr<const UnknownFlow>(std::move(flow));
+  new (&py_flow->key) std::unique_ptr<const FlowKey>(new FlowKey(key));
+  new (&py_flow->it) std::unique_ptr<FlowIterator>(
+      new FlowIterator(*py_flow->flow));
 
   return py_flow;
 }
@@ -252,8 +473,28 @@ struct PythonFlowParser {
   PyObject* flow_callback;
 };
 
+static void OffloadError(const PythonFlowParser* py_parser,
+                         const std::string& message) {
+  PyGILState_STATE d_gstate;
+  PyObject* arglist;
+  PyObject* result;
+
+  d_gstate = PyGILState_Ensure();
+
+  arglist = Py_BuildValue("(s)", message.c_str());
+  result = PyObject_CallObject(py_parser->error_callback, arglist);
+  Py_DECREF(arglist);
+
+  if (result == nullptr) {
+    PyErr_Print();
+  }
+
+  Py_XDECREF(result);
+  PyGILState_Release(d_gstate);
+}
+
 template<typename T>
-static void OffloadFlowToCallback(PythonFlowParser* py_parser,
+static void OffloadFlowToCallback(const PythonFlowParser* py_parser,
                                   const FlowKey& key, T* flow) {
   PyGILState_STATE d_gstate;
   PyObject* arglist;
@@ -290,6 +531,31 @@ static void PythonFlowParserTCPFlowOffload(PythonFlowParser* py_parser,
                                            std::unique_ptr<TCPFlow> flow) {
   flow::PythonTCPFlow* py_flow = flow::FromTCPFlow(key, std::move(flow));
   OffloadFlowToCallback<flow::PythonTCPFlow>(py_parser, key, py_flow);
+}
+
+// Offloads a single UDP flow to the flow callback.
+static void PythonFlowParserUDPFlowOffload(PythonFlowParser* py_parser,
+                                           const FlowKey& key,
+                                           std::unique_ptr<UDPFlow> flow) {
+  flow::PythonUDPFlow* py_flow = flow::FromUDPFlow(key, std::move(flow));
+  OffloadFlowToCallback<flow::PythonUDPFlow>(py_parser, key, py_flow);
+}
+
+// Offloads a single ICMP flow to the flow callback.
+static void PythonFlowParserICMPFlowOffload(PythonFlowParser* py_parser,
+                                            const FlowKey& key,
+                                            std::unique_ptr<ICMPFlow> flow) {
+  flow::PythonICMPFlow* py_flow = flow::FromICMPFlow(key, std::move(flow));
+  OffloadFlowToCallback<flow::PythonICMPFlow>(py_parser, key, py_flow);
+}
+
+// Offloads a single unknown flow to the flow callback.
+static void PythonFlowParserUnknownFlowOffload(
+    PythonFlowParser* py_parser, const FlowKey& key,
+    std::unique_ptr<UnknownFlow> flow) {
+  flow::PythonUnknownFlow* py_flow = flow::FromUnknownFlow(key,
+                                                           std::move(flow));
+  OffloadFlowToCallback<flow::PythonUnknownFlow>(py_parser, key, py_flow);
 }
 
 // Frees a PythonFlowParser instance.
@@ -345,21 +611,43 @@ static PyObject* PythonFlowParserNew(PyTypeObject *type, PyObject *args,
   Py_INCREF(flow_callback);
   self->flow_callback = flow_callback;
 
-  if (error_callback) {
-    Py_INCREF(error_callback);
-    self->error_callback = error_callback;
-  }
-
   FlowParserConfig cfg;
+
   if (is_file) {
     cfg.OfflineTrace(std::string(source));
   } else {
     cfg.OnlineTrace(std::string(source));
   }
 
+  if (error_callback) {
+    Py_INCREF(error_callback);
+    self->error_callback = error_callback;
+
+    cfg.InfoCallback([self] (const std::string& message) {
+      OffloadError(self, message);
+    });
+
+    cfg.BadStatusCallback([self] (Status status) {
+      OffloadError(self, status.ToString());
+    });
+  }
+
   cfg.TCPCallback([self] (const FlowKey& key, unique_ptr<TCPFlow> flow) {
     PythonFlowParserTCPFlowOffload(self, key, std::move(flow));
   });
+
+  cfg.UDPCallback([self] (const FlowKey& key, unique_ptr<UDPFlow> flow) {
+    PythonFlowParserUDPFlowOffload(self, key, std::move(flow));
+  });
+
+  cfg.ICMPCallback([self] (const FlowKey& key, unique_ptr<ICMPFlow> flow) {
+    PythonFlowParserICMPFlowOffload(self, key, std::move(flow));
+  });
+
+  cfg.UnknownCallback(
+      [self] (const FlowKey& key, unique_ptr<UnknownFlow> flow) {
+        PythonFlowParserUnknownFlowOffload(self, key, std::move(flow));
+      });
 
   if (soft_mem_limit_mb > 0) {
     cfg.MemoryLimits(soft_mem_limit_mb * 1000000.0,
@@ -448,6 +736,9 @@ using flowparser::python_shim::fparser_module_methods;
 
 using flowparser::python_shim::flow_parser::python_flow_parser_type;
 using flowparser::python_shim::flow::python_tcp_flow_type;
+using flowparser::python_shim::flow::python_udp_flow_type;
+using flowparser::python_shim::flow::python_icmp_flow_type;
+using flowparser::python_shim::flow::python_unknown_flow_type;
 
 using flowparser::python_shim::flow_key::fparser_flow_key_ntuple_type;
 using flowparser::python_shim::flow_key::flow_key_ntuple_desc;
@@ -457,6 +748,9 @@ using flowparser::python_shim::header::ip_hdr_ntuple_desc;
 
 using flowparser::python_shim::header::fparser_tcp_hdr_ntuple_type;
 using flowparser::python_shim::header::tcp_hdr_ntuple_desc;
+
+using flowparser::python_shim::header::fparser_icmp_hdr_ntuple_type;
+using flowparser::python_shim::header::icmp_hdr_ntuple_desc;
 
 PyMODINIT_FUNC initfparser(void) {
   PyObject *m;
@@ -470,7 +764,19 @@ PyMODINIT_FUNC initfparser(void) {
     return;
   }
 
-  if (PyType_Ready(&python_tcp_flow_type) < 0) {
+  if (PyType_Ready((PyTypeObject*) &python_tcp_flow_type) < 0) {
+    return;
+  }
+
+  if (PyType_Ready((PyTypeObject*) &python_udp_flow_type) < 0) {
+    return;
+  }
+
+  if (PyType_Ready((PyTypeObject*) &python_icmp_flow_type) < 0) {
+    return;
+  }
+
+  if (PyType_Ready((PyTypeObject*) &python_unknown_flow_type) < 0) {
     return;
   }
 
@@ -479,6 +785,15 @@ PyMODINIT_FUNC initfparser(void) {
 
   Py_INCREF(&python_tcp_flow_type);
   PyModule_AddObject(m, "TCPFlow", (PyObject *) &python_tcp_flow_type);
+
+  Py_INCREF(&python_udp_flow_type);
+  PyModule_AddObject(m, "UDPFlow", (PyObject *) &python_udp_flow_type);
+
+  Py_INCREF(&python_icmp_flow_type);
+  PyModule_AddObject(m, "ICMPFlow", (PyObject *) &python_icmp_flow_type);
+
+  Py_INCREF(&python_unknown_flow_type);
+  PyModule_AddObject(m, "UnknownFlow", (PyObject *) &python_unknown_flow_type);
 
   PyStructSequence_InitType(&fparser_flow_key_ntuple_type,
                             &flow_key_ntuple_desc);
@@ -492,6 +807,12 @@ PyMODINIT_FUNC initfparser(void) {
   PyStructSequence_InitType(&fparser_tcp_hdr_ntuple_type, &tcp_hdr_ntuple_desc);
   Py_INCREF(&fparser_tcp_hdr_ntuple_type);
   PyModule_AddObject(m, "TCPHeader", (PyObject*) &fparser_tcp_hdr_ntuple_type);
+
+  PyStructSequence_InitType(&fparser_icmp_hdr_ntuple_type,
+                            &icmp_hdr_ntuple_desc);
+  Py_INCREF(&fparser_icmp_hdr_ntuple_type);
+  PyModule_AddObject(m, "ICMPHeader",
+                     (PyObject*) &fparser_icmp_hdr_ntuple_type);
 
   PyEval_InitThreads();
 }
