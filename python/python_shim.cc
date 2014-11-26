@@ -49,7 +49,7 @@ static PyObject* FromFlowKey(const FlowKey& key) {
 
 // fparser.IPHeader is the Python equivalent of flowparser::IPHeader. It
 // contains all fields that are tracked by flowparser for every IP packet.
-namespace ip_header {
+namespace header {
 
 static PyTypeObject fparser_ip_hdr_ntuple_type = { 0, 0, 0, 0, 0, 0 };
 static PyStructSequence_Field ip_hdr_ntuple_fields[] = { { "timestamp",
@@ -60,7 +60,7 @@ static PyStructSequence_Desc ip_hdr_ntuple_desc = { "fparser.IPHeader", nullptr,
     ip_hdr_ntuple_fields, 4 };
 
 // Constructs a new fparser.IPHeader from a flowparser::IPHeader instance.
-static PyObject* FromIPHeader(const IPHeader& ip) {
+static PyObject* FromHeader(const IPHeader& ip) {
   PyObject* ntuple = PyStructSequence_New(&fparser_ip_hdr_ntuple_type);
   PyStructSequence_SET_ITEM(ntuple, 0,
                             PyLong_FromUnsignedLongLong(ip.timestamp));
@@ -71,12 +71,6 @@ static PyObject* FromIPHeader(const IPHeader& ip) {
   return ntuple;
 }
 
-}  // namespace ip_header
-
-// fparser.TCPHeader is the Python equivalent of flowparser::TCPHeader, with the
-// difference that it contains the ip header as a member.
-namespace tcp_header {
-
 static PyTypeObject fparser_tcp_hdr_ntuple_type = { 0, 0, 0, 0, 0, 0 };
 static PyStructSequence_Field tcp_hdr_ntuple_fields[] = { { "ip", "IP header" },
     { "seq", "TCP sequence number" }, { "ack", "TCP ack number" }, { "win",
@@ -85,9 +79,9 @@ static PyStructSequence_Field tcp_hdr_ntuple_fields[] = { { "ip", "IP header" },
 static PyStructSequence_Desc tcp_hdr_ntuple_desc = { "fparser.TCPHeader",
     nullptr, tcp_hdr_ntuple_fields, 5 };
 
-static PyObject* FromTCPHeader(const IPHeader& ip, const TCPHeader& tcp) {
+static PyObject* FromHeader(const IPHeader& ip, const TCPHeader& tcp) {
   PyObject* ntuple = PyStructSequence_New(&fparser_tcp_hdr_ntuple_type);
-  PyStructSequence_SET_ITEM(ntuple, 0, ip_header::FromIPHeader(ip));
+  PyStructSequence_SET_ITEM(ntuple, 0, FromHeader(ip));
   PyStructSequence_SET_ITEM(ntuple, 1, PyLong_FromUnsignedLongLong(tcp.seq));
   PyStructSequence_SET_ITEM(ntuple, 2, PyLong_FromUnsignedLongLong(tcp.ack));
   PyStructSequence_SET_ITEM(ntuple, 3, PyInt_FromLong(tcp.win));
@@ -96,78 +90,89 @@ static PyObject* FromTCPHeader(const IPHeader& ip, const TCPHeader& tcp) {
   return ntuple;
 }
 
-}  // namespace tcp_header
+}  // namespace header
 
-// fparser.TCPFlow is the Python equivalent of flowparser::TCPFlow.
-namespace tcp_flow {
+// All members of this namespace are templatized for the different flow types.
+// This is ugly, but it is better than repeating the same code N times.
+namespace flow {
 
 // The main struct that holds a flow, its key and an iterator as unique
 // pointers.
-struct PythonTCPFlow {
+template<typename T, typename I>
+struct PythonFlow {
   PyObject_HEAD
 
   uint64_t size_pkts;  // number of packets in the flow
-  std::unique_ptr<const TCPFlow> flow;
+  std::unique_ptr<const T> flow;
   std::unique_ptr<const FlowKey> key;
-  std::unique_ptr<TCPFlowIterator> it;  // iterator
+  std::unique_ptr<I> it;  // iterator
 };
 
-// Frees a PythonTCPFlow
-static void PythonTCPFlowDealloc(PythonTCPFlow* fparser_flow) {
-  fparser_flow->it.~unique_ptr();
-  fparser_flow->flow.~unique_ptr();
-  fparser_flow->key.~unique_ptr();
+typedef PythonFlow<TCPFlow, TCPFlowIterator> PythonTCPFlow;
 
-  fparser_flow->ob_type->tp_free((PyObject *) fparser_flow);
-}
+// A wrapper class that has only static methods
+template<typename T, typename H, typename I>
+class StaticWrapper {
+ public:
+  // Frees a PythonTCPFlow
+  static void PythonFlowDealloc(T* fparser_flow) {
+    fparser_flow->it.~unique_ptr();
+    fparser_flow->flow.~unique_ptr();
+    fparser_flow->key.~unique_ptr();
 
-// Returns the flow's id.
-static PyObject* PythonTCPFlowGetId(PyObject* self) {
-  const PythonTCPFlow* py_flow = (PythonTCPFlow*) self;
-  const FlowKey& key = *py_flow->key;
+    fparser_flow->ob_type->tp_free((PyObject *) fparser_flow);
+  }
 
-  return flow_key::FromFlowKey(key);
-}
+  // Returns the flow's id.
+  static PyObject* PythonFlowGetId(PyObject* self) {
+    const T* py_flow = (T*) self;
+    const FlowKey& key = *py_flow->key;
 
-// Returns the number of packets in the flow.
-static Py_ssize_t PythonTCPFlowGetLen(PyObject* self) {
-  const PythonTCPFlow* py_flow = (PythonTCPFlow*) self;
-  return (Py_ssize_t) py_flow->size_pkts;
-}
+    return flow_key::FromFlowKey(key);
+  }
+
+  // Returns the number of packets in the flow.
+  static Py_ssize_t PythonFlowGetLen(PyObject* self) {
+    const T* py_flow = (T*) self;
+    return (Py_ssize_t) py_flow->size_pkts;
+  }
+
+  // Gets the next object from the iterator, or raises a StopIteration exception
+  // and resets the iterator.
+  static PyObject* PythonFlowIternext(PyObject* self) {
+    T* py_flow = (T*) self;
+
+    IPHeader ip_header;
+    H transport_header;
+    bool has_more = py_flow->it->Next(&ip_header, &transport_header);
+    if (!has_more) {
+      py_flow->it = std::make_unique<I>(*py_flow->flow);
+      PyErr_SetNone(PyExc_StopIteration);
+      return nullptr;
+    }
+
+    return header::FromHeader(ip_header, transport_header);
+  }
+};
+
+typedef StaticWrapper<PythonTCPFlow, TCPHeader, TCPFlowIterator> TCPMethods;
 
 // The flow's iterator is just the flow object itself - the it field is
 // populated with the most recent iterator.
-static PyObject* PythonTCPFlowIter(PyObject* self) {
+static PyObject* PythonFlowIter(PyObject* self) {
   Py_INCREF(self);
   return self;
 }
 
-// Gets the next object from the iterator, or raises a StopIteration exception
-// and resets the iterator.
-static PyObject* PythonTCPFlowIternext(PyObject* self) {
-  PythonTCPFlow* py_flow = (PythonTCPFlow*) self;
-
-  IPHeader ip_header;
-  TCPHeader tcp_header;
-  bool has_more = py_flow->it->Next(&ip_header, &tcp_header);
-  if (!has_more) {
-    py_flow->it = std::make_unique<TCPFlowIterator>(*py_flow->flow);
-    PyErr_SetNone(PyExc_StopIteration);
-    return nullptr;
-  }
-
-  return tcp_header::FromTCPHeader(ip_header, tcp_header);
-}
-
 // The methods of a PythonTCPFlow object.
 static PyMethodDef python_tcp_flow_methods[] = { { "get_id",
-    (PyCFunction) PythonTCPFlowGetId, METH_NOARGS,
+    (PyCFunction) TCPMethods::PythonFlowGetId, METH_NOARGS,
     "Returns (source ip, source port, dest ip, dest port)" }, { nullptr } };
 
 // A PythonTCPFlow is also a sequence of its packets - it needs to have a
 // length.
 static PySequenceMethods python_tcp_flow_sequence_methods = {
-    PythonTCPFlowGetLen, /* sq_length */
+    TCPMethods::PythonFlowGetLen, /* sq_length */
 };
 
 // Boilerplae for the type.
@@ -175,7 +180,7 @@ PyTypeObject python_tcp_flow_type = { PyObject_HEAD_INIT(nullptr) 0, /*ob_size*/
 "fparser.TCPFlow", /*tp_name*/
 sizeof(PythonTCPFlow), /*tp_basicsize*/
 0, /*tp_itemsize*/
-(destructor) PythonTCPFlowDealloc, /*tp_dealloc*/
+(destructor) TCPMethods::PythonFlowDealloc, /*tp_dealloc*/
 0, /*tp_print*/
 0, /*tp_getattr*/
 0, /*tp_setattr*/
@@ -198,8 +203,8 @@ Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_ITER,
 0, /* tp_clear */
 0, /* tp_richcompare */
 0, /* tp_weaklistoffset */
-PythonTCPFlowIter, /* tp_iter: __iter__() method */
-PythonTCPFlowIternext, /* tp_iternext: next() method */
+PythonFlowIter, /* tp_iter: __iter__() method */
+TCPMethods::PythonFlowIternext, /* tp_iternext: next() method */
 python_tcp_flow_methods /* tp_methods */
 };
 
@@ -209,7 +214,7 @@ python_tcp_flow_methods /* tp_methods */
 // is handed off to Python.
 static PythonTCPFlow* FromTCPFlow(const FlowKey& key,
                                   std::unique_ptr<TCPFlow> flow) {
-  struct PythonTCPFlow* py_flow;
+  PythonTCPFlow* py_flow;
 
   py_flow = PyObject_New(PythonTCPFlow, (PyTypeObject* ) &python_tcp_flow_type);
   if (!py_flow) {
@@ -283,9 +288,8 @@ static void OffloadFlowToCallback(PythonFlowParser* py_parser,
 static void PythonFlowParserTCPFlowOffload(PythonFlowParser* py_parser,
                                            const FlowKey& key,
                                            std::unique_ptr<TCPFlow> flow) {
-  tcp_flow::PythonTCPFlow* py_flow = tcp_flow::FromTCPFlow(key,
-                                                           std::move(flow));
-  OffloadFlowToCallback<tcp_flow::PythonTCPFlow>(py_parser, key, py_flow);
+  flow::PythonTCPFlow* py_flow = flow::FromTCPFlow(key, std::move(flow));
+  OffloadFlowToCallback<flow::PythonTCPFlow>(py_parser, key, py_flow);
 }
 
 // Frees a PythonFlowParser instance.
@@ -443,16 +447,16 @@ extern "C" {
 using flowparser::python_shim::fparser_module_methods;
 
 using flowparser::python_shim::flow_parser::python_flow_parser_type;
-using flowparser::python_shim::tcp_flow::python_tcp_flow_type;
+using flowparser::python_shim::flow::python_tcp_flow_type;
 
 using flowparser::python_shim::flow_key::fparser_flow_key_ntuple_type;
 using flowparser::python_shim::flow_key::flow_key_ntuple_desc;
 
-using flowparser::python_shim::ip_header::fparser_ip_hdr_ntuple_type;
-using flowparser::python_shim::ip_header::ip_hdr_ntuple_desc;
+using flowparser::python_shim::header::fparser_ip_hdr_ntuple_type;
+using flowparser::python_shim::header::ip_hdr_ntuple_desc;
 
-using flowparser::python_shim::tcp_header::fparser_tcp_hdr_ntuple_type;
-using flowparser::python_shim::tcp_header::tcp_hdr_ntuple_desc;
+using flowparser::python_shim::header::fparser_tcp_hdr_ntuple_type;
+using flowparser::python_shim::header::tcp_hdr_ntuple_desc;
 
 PyMODINIT_FUNC initfparser(void) {
   PyObject *m;
