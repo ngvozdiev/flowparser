@@ -58,29 +58,27 @@ void Parser<T, P>::PrivateCollectFlows(
   std::vector<std::pair<FlowKey, std::unique_ptr<T>>>flows_to_collect;
 
   // Lock the table mutex
-  {
-    std::unique_lock<std::mutex> table_lock(flows_table_mutex_);
+  std::unique_lock<std::mutex> table_lock(flows_table_mutex_);
 
-    auto it = flows_table_.begin();
-    while (it != flows_table_.end()) {
-      const FlowKey& key = it->first;
-      auto& flow = it->second;
+  auto it = flows_table_.begin();
+  while (it != flows_table_.end()) {
+    const FlowKey& key = it->first;
+    auto& flow = it->second;
 
-      bool to_delete = false;
-      flow->UpdateAverages();
+    bool to_delete = false;
+    flow->UpdateAverages();
 
-      if (eval_for_collection(*flow)) {
-        flow->Deactivate();
-        flows_to_collect.push_back( {key, std::move(flow)});
+    if (eval_for_collection(*flow)) {
+      flow->Deactivate();
+      flows_to_collect.push_back( {key, std::move(flow)});
 
-        to_delete = true;
-      }
+      to_delete = true;
+    }
 
-      if (to_delete) {
-        flows_table_.erase(it++);
-      } else {
-        ++it;
-      }
+    if (to_delete) {
+      flows_table_.erase(it++);
+    } else {
+      ++it;
     }
   }
 
