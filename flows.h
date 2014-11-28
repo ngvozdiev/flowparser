@@ -47,12 +47,6 @@ struct ICMPHeader {
   uint8_t code;
 };
 
-// ESP header.
-struct ESPHeader {
-  uint32_t spi;
-  uint32_t seq;
-};
-
 // Information about a flow.
 struct FlowInfo {
   double avg_pkts_per_period = 0.0;

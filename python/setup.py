@@ -10,7 +10,7 @@ module = Extension('fparser',
                                          '-Wno-missing-field-initializers', '-Wno-write-strings'])
 
 setup (name = 'FlowParser',
-       version = '0.1.10',
+       version = '0.2.0',
        description = 'A flow parsing/dumping utility',
        ext_modules = [module],
        url = 'flowparser.googlecode.com',
