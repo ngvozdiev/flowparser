@@ -39,6 +39,11 @@ message BinPack {
      // new flows starting during the duration of time 
      // covered by the bucket.
      NEW_FLOWS = 4;
+
+     // Each bin will contain buckets with the number 
+     // of flows ending during the duration of time 
+     // covered by the bucket.
+     END_TIMESTAMP = 5;
   }
 
   optional Type type = 1; // required 

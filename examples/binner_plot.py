@@ -34,5 +34,10 @@ for bin_pack in binned_flows.bin_packs:
         plt.plot(x, binned_values.bins, label=label)
         #print '\t\tValues', binned_values.bins
 
-        plt.legend()
+    plt.legend()
+
+    label = binner_pb2.BinPack.Type.Name(bin_pack.type)
+    bin_width = str(bin_pack.bin_width / 1000000.0)
+    plt.title(label + ' grouped by time, bin width ' + bin_width + 'sec')
+
 plt.show()

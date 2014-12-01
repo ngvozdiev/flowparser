@@ -168,6 +168,28 @@ class NewFlowsBinPack : public BinPackValue {
   }
 };
 
+class EndTimestampBinPack : public BinPackValue {
+ public:
+  EndTimestampBinPack(uint64_t bin_width, uint64_t small_flows_threshold)
+      : BinPackValue(BinPack::END_TIMESTAMP, bin_width, small_flows_threshold) {
+  }
+
+ protected:
+  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+      override {
+    FlowIterator it(flow);
+    IPHeader ip_header;
+    uint64_t last_timestamp;
+
+    while (it.Next(&ip_header)) {
+      last_timestamp = ip_header.timestamp;
+    }
+
+    AddToBin(last_timestamp, 1, type);
+    AddToBin(last_timestamp, 1, FlowType::TOTAL);
+  }
+};
+
 class ActiveFlowsBinPack : public BinPackValue {
  public:
   ActiveFlowsBinPack(uint64_t bin_width, uint64_t small_flows_threshold)
@@ -177,6 +199,11 @@ class ActiveFlowsBinPack : public BinPackValue {
  protected:
   void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
       override {
+    // We will assume the flows do not repeat and the keys passed to this
+    // function are unique. If we run out of memory and evict a flow which has
+    // not actually terminated this will not be the case.
+    static uint32_t key_id = 0;
+
     FlowIterator it(flow);
     IPHeader ip_header;
     while (it.Next(&ip_header)) {
@@ -185,17 +212,19 @@ class ActiveFlowsBinPack : public BinPackValue {
       uint64_t bin_num = GetBinNum(timestamp);
 
       auto& active_flows_set = active_bin_array_[type][bin_num];
-      bool inserted = active_flows_set.insert(key).second;
+      bool inserted = active_flows_set.insert(key_id).second;
 
       if (inserted) {
         AddToBin(timestamp, 1, type);
         AddToBin(timestamp, 1, FlowType::TOTAL);
       }
     }
+
+    key_id++;
   }
 
  private:
-  typedef std::map<uint64_t, std::unordered_set<FlowKey, KeyHasher>> ActiveBins;
+  typedef std::map<uint64_t, std::set<uint32_t>> ActiveBins;
   std::array<ActiveBins, FlowType_ARRAYSIZE> active_bin_array_;
 };
 

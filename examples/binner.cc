@@ -132,6 +132,10 @@ Status Binner::InitBinPacks() {
       new_bin_pack = std::unique_ptr<BinPackValue>(
           new ActiveFlowsBinPack(bin_pack_config.bin_width(),
                                  small_flows_threshold));
+    } else if (bin_pack_config.type() == BinPack::END_TIMESTAMP) {
+      new_bin_pack = std::unique_ptr<BinPackValue>(
+          new EndTimestampBinPack(bin_pack_config.bin_width(),
+                                  small_flows_threshold));
     } else {
       return "Unknown bin pack type";
     }
