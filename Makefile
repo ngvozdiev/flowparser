@@ -65,10 +65,15 @@ flowparser_test: flowparser_test.o gtest_main.o gtest-all.o $(OBJS)
 
 # Examples
 
-examples/size_binner.o: examples/size_binner.cc flowparser.o
+examples/binner.pb.o: examples/binner.pb.cc
 
-examples/size_binner: examples/size_binner.o $(OBJS)
-	$(CXX) $^ -o $@ $(LDFLAGS)
+examples/binner.pb.cc: examples/binner.proto
+	protoc --cpp_out=examples --python_out=examples --proto_path=examples examples/binner.proto
+
+examples/binner.o: examples/binner.cc examples/binner.pb.o flowparser.o
+
+examples/binner: examples/binner.o examples/binner.pb.o $(OBJS)
+	$(CXX) $^ -o $@ $(LDFLAGS) -lprotobuf
 
 clean:
 	$(RM) *.o *.a *.gcov *.gcda *.gcno *_test 

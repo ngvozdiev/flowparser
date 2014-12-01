@@ -1,0 +1,73 @@
+package flowparser.example.binner;
+
+enum FlowType {
+     TOTAL = 0;
+     SMALL_TCP = 1;
+     SMALL_UDP = 2;
+     SMALL_NO_TCP_UDP = 3;
+     LARGE_HTTP = 4;
+     LARGE_HTTPS = 5;
+     LARGE_FTP = 6;
+     LARGE_TORRENT = 7;
+     LARGE_OTHER_TCP = 8;
+     LARGE_OTHER_UDP = 9;
+     LARGE_NO_TCP_UDP = 10;
+}
+
+message BinnedValues {
+  optional FlowType type = 1; // required
+  repeated uint64 bins = 2; // same length as BinPack.num_bins
+}
+
+message BinPack {
+  enum Type {
+     UNKNOWN = 0;
+
+     // Each bin will contain buckets with total flow 
+     // size for the duration of the bucket (bytes)
+     SIZES_BYTES = 1;
+
+     // Each bin will contain buckets with total flow 
+     // size for the duration of the bucket (pkts)
+     SIZES_PKTS = 2;
+
+     // Active flows per bucket - same as SIZES_PKTS, 
+     // but each flow is only counted once per bucket.
+     ACTIVE_FLOWS = 3;
+
+     // Each bin will contain buckets with the number of 
+     // new flows starting during the duration of time 
+     // covered by the bucket.
+     NEW_FLOWS = 4;
+  }
+
+  optional Type type = 1; // required 
+  optional uint64 bins_start = 2; // required
+  optional uint64 bin_width = 3; // required
+  optional uint32 num_bins = 4; // required
+  repeated BinnedValues values = 5;
+}
+
+message BinnedFlows {
+  repeated BinPack bin_packs = 1;
+}
+
+message FlowCount {
+  optional FlowType type = 1; // required
+  optional uint32 count = 2; // required
+}
+
+message FlowCounts {
+  repeated FlowCount flow_counts = 1;
+}
+
+message BinPackConfig {
+  optional BinPack.Type type = 1; // required
+  optional uint64 bin_width = 2 [default = 1000000];
+}
+
+message BinnerConfig {
+  repeated BinPackConfig bin_pack_configs = 1;
+  optional uint32 small_flow_threshold = 2 [default = 10000];
+  optional string pcap_filename = 3; // required
+}
