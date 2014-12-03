@@ -179,7 +179,7 @@ class EndTimestampBinPack : public BinPackValue {
       override {
     FlowIterator it(flow);
     IPHeader ip_header;
-    uint64_t last_timestamp;
+    uint64_t last_timestamp = 0;
 
     while (it.Next(&ip_header)) {
       last_timestamp = ip_header.timestamp;
