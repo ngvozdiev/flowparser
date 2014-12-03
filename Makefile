@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O2
+CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O0
 GTEST_DIR = gtest
 GTEST_FLAGS=-isystem $(GTEST_DIR)/include
 LDFLAGS=-g -lpcap -pthread
@@ -8,7 +8,7 @@ GTEST_HEADERS = $(GTEST_DIR)/include/gtest/*.h \
                 $(GTEST_DIR)/include/gtest/internal/*.h
 GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/src/*.h $(GTEST_HEADERS)
 
-SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc flowparser.cc
+SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc metric_exporter.cc flowparser.cc
 OBJS=$(subst .cc,.o,$(SRCS))
 RM=rm -f
 
@@ -23,6 +23,8 @@ gtest_main.o : $(GTEST_SRCS_)
 common.o: common.cc common.h
 
 periodic_runner.o: periodic_runner.cc periodic_runner.h
+
+metric_exporter.o: metric_exporter.cc metric_exporter.h
 
 packer.o: packer.cc packer.h common.o
 
@@ -55,6 +57,12 @@ periodic_runner_test.o: periodic_runner_test.cc periodic_runner.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c periodic_runner_test.cc
 
 periodic_runner_test: periodic_runner_test.o gtest_main.o gtest-all.o $(OBJS)
+	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
+
+metric_exporter_test.o: metric_exporter_test.cc metric_exporter.o
+	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c metric_exporter_test.cc
+
+metric_exporter_test: metric_exporter_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
 
 flowparser_test.o: flowparser_test.cc flowparser.o

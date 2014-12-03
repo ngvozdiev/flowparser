@@ -4,7 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
-#include <set>
+#include <unordered_set>
 #include <memory>
 #include <vector>
 
@@ -224,7 +224,7 @@ class ActiveFlowsBinPack : public BinPackValue {
   }
 
  private:
-  typedef std::map<uint64_t, std::set<uint32_t>> ActiveBins;
+  typedef std::map<uint64_t, std::unordered_set<uint32_t>> ActiveBins;
   std::array<ActiveBins, FlowType_ARRAYSIZE> active_bin_array_;
 };
 

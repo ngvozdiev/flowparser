@@ -1,6 +1,11 @@
 import matplotlib.pylab as plt
 import binner_pb2
 import sys
+import datetime
+from matplotlib.ticker import FuncFormatter
+
+def timestamp_to_string(x, pos):
+    return datetime.datetime.fromtimestamp(x / 1000.0 / 1000.0).strftime('%M:%S.%f')
 
 binned_flows = binner_pb2.BinnedFlows()
 
@@ -12,7 +17,7 @@ for bin_pack in binned_flows.bin_packs:
     plt.figure()
     
     start = bin_pack.bins_start
-    x = [start + k * bin_pack.bin_width for k in range(bin_pack.num_bins)]
+    x = [k * bin_pack.bin_width for k in range(bin_pack.num_bins)]
 
     #print '\tBP type', bin_pack.type
     #print '\tBP start', bin_pack.bins_start
@@ -32,6 +37,7 @@ for bin_pack in binned_flows.bin_packs:
 
         label = binner_pb2.FlowType.Name(binned_values.type)
         plt.plot(x, binned_values.bins, label=label)
+        plt.axes().xaxis.set_major_formatter(FuncFormatter(timestamp_to_string))
         #print '\t\tValues', binned_values.bins
 
     plt.legend()

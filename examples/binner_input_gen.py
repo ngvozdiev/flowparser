@@ -1,7 +1,7 @@
 import binner_pb2
 
 binner_config = binner_pb2.BinnerConfig()
-binner_config.pcap_filename = '/Users/nik/caida_uncompressed/equinix-sanjose.dirA.20130117-125912.UTC.anon.pcap'
+binner_config.pcap_filename = '/home/nik/caida/uncompressed/out.pcap'
 
 bin_pack_config = binner_config.bin_pack_configs.add()
 bin_pack_config.type = binner_pb2.BinPack.SIZES_BYTES
