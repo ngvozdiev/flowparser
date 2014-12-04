@@ -1,5 +1,5 @@
-#ifndef FPARSER_METRIC_EXPORTER_H
-#define FPARSER_METRIC_EXPORTER_H
+#ifndef FPARSER_METRIC_H
+#define FPARSER_METRIC_H
 
 #include <tuple>
 #include <array>
@@ -10,6 +10,11 @@
 #include "periodic_runner.h"
 
 namespace flowparser {
+
+// Lifted from http://www.exploringbinary.com
+constexpr int IsPowerOfTwo(uint32_t x) {
+  return ((x != 0) && ((x & (~x + 1)) == x));
+}
 
 // A class that knows how to consume metric values. This template should have
 // the same arguments as the metric it consumes.
@@ -53,14 +58,14 @@ class Metric {
   }
 
   // Returns the timestamp of a value.
-  static constexpr size_t Timestamp(const StampedMetricValue& value) {
-    return std::get<1>(value);
+  static constexpr time_t Timestamp(const StampedMetricValue& value) {
+    return static_cast<time_t>(std::get<1>(value));
   }
 
   Metric()
       : id_(0),
         epoch_id_(0) {
-    static_assert(HSize > 0, "History size must be greater than 0");
+    static_assert(IsPowerOfTwo(HSize), "History size must be a power of 2");
   }
 
   // The most recent value inserted this epoch. If there are no values inserted
@@ -71,7 +76,7 @@ class Metric {
       return "History empty";
     }
 
-    size_t index = (id_ - 1) % kHistorySize;
+    size_t index = (id_ - 1) & kMask;
     return values_[index];
   }
 
@@ -92,8 +97,7 @@ class Metric {
       history.reserve(size);
 
       for (uint64_t i = start; i < start + size; ++i) {
-        size_t index = i % kHistorySize;
-        history.push_back(values_[index]);
+        history.push_back(values_[i & kMask]);
       }
 
       // Reset the epoch.
@@ -116,12 +120,14 @@ class Metric {
         .count();
 
     std::unique_lock<std::mutex> lock(mu_);
-    size_t index = id_ % kHistorySize;
-    uint64_t id = static_cast<uint64_t>(epoch_id_) << 32 | ++id_;
-    values_[index] = std::make_tuple(id, timestamp, first, rest...);
+    uint64_t combined_id = static_cast<uint64_t>(epoch_id_) << 32 | id_;
+    values_[id_++ & kMask] = std::make_tuple(combined_id, timestamp, first,
+                                             rest...);
   }
 
  private:
+  static constexpr size_t kMask = kHistorySize - 1;
+
   // A mutex to protect the metric.
   std::mutex mu_;
 
@@ -133,43 +139,6 @@ class Metric {
 
   // Values are stored in a constant-size array.
   std::array<StampedMetricValue, HSize> values_;
-};
-
-// A percent metric. The value supplied should be in the 0-1 range, if it is
-// not then it will be truncated.
-class PercentMetric : public Metric<1000, double> {
-  void AddValue(double value) {
-    if (value > 1.0) {
-      value = 1.0;
-    }
-
-    if (value < 0.0) {
-      value = 0.0;
-    }
-
-    Metric<1000, double>::ProtectedAddValue(value);
-  }
-};
-
-// Severity levels for log messages.
-enum LogLevel {
-  DEBUG,
-  INFO,
-  WARN,
-  ERROR
-};
-
-// A metric that records log messages.
-class LogMetric : public Metric<1000, LogLevel, std::string> {
-  void AddValue(enum LogLevel log_level, std::string message) {
-    Metric<1000, LogLevel, std::string>::ProtectedAddValue(log_level, message);
-  }
-};
-
-class ConsoleLogMetricConsumer : public MetricConsumer<LogLevel, std::string> {
-  void ConsumeHistory(const std::vector<StampedMetricValue>& values) override {
-
-  }
 };
 
 // A metric manager is responsible for periodically collecting a metric's
@@ -202,14 +171,13 @@ class MetricManager {
     ConsumeMetric();
   }
 
- private:
-
   void ConsumeMetric() {
     for (const auto& consumer : consumers_) {
       metric_->ConsumeHistoryAndEndEpoch(consumer.get());
     }
   }
 
+ private:
   // The consumers
   std::vector<ConsumerPtr> consumers_;
 
@@ -222,4 +190,4 @@ class MetricManager {
 
 }
 
-#endif  /* FPARSER_METRIC_EXPORTER_H */
+#endif  /* FPARSER_METRIC_H */

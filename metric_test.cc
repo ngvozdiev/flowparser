@@ -4,26 +4,30 @@
 #include <map>
 
 #include "gtest/gtest.h"
-#include "metric_exporter.h"
+#include "metric.h"
 
 namespace flowparser {
 namespace test {
 
-class SingleHistoryTestMetric : public Metric<1, uint32_t> {
+static constexpr size_t kSmallP2 = 1 << 1;
+static constexpr size_t kLargeP2 = 1 << 10;
+static constexpr size_t kReallyLargeP2 = 1 << 20;
+
+class TwoElementHistoryTestMetric : public Metric<kSmallP2, uint32_t> {
  public:
   void AddValue(uint32_t value) {
     ProtectedAddValue(value);
   }
 };
 
-class LongHistoryTestMetric : public Metric<1000, uint32_t> {
+class LongHistoryTestMetric : public Metric<kLargeP2, uint32_t> {
  public:
   void AddValue(uint32_t value) {
     ProtectedAddValue(value);
   }
 };
 
-class ReallyLongHistoryTestMetric : public Metric<1000000, uint32_t> {
+class ReallyLongHistoryTestMetric : public Metric<kReallyLargeP2, uint32_t> {
  public:
   void AddValue(uint32_t value) {
     ProtectedAddValue(value);
@@ -52,7 +56,7 @@ class DummyConsumer : public MetricConsumer<uint32_t> {
 };
 
 TEST(Metric, Init) {
-  SingleHistoryTestMetric int_metric;
+  TwoElementHistoryTestMetric int_metric;
   DummyConsumer consumer;
 
   ASSERT_FALSE(int_metric.MostRecent().ok());
@@ -60,8 +64,8 @@ TEST(Metric, Init) {
   ASSERT_TRUE(consumer.all_values().empty());
 }
 
-TEST(Metric, SingleElementHistory) {
-  SingleHistoryTestMetric int_metric;
+TEST(Metric, SingleValueHistory) {
+  TwoElementHistoryTestMetric int_metric;
   DummyConsumer consumer;
 
   int_metric.AddValue(10);
@@ -75,8 +79,8 @@ TEST(Metric, SingleElementHistory) {
   ASSERT_EQ(value, consumer.all_values().at(0));
 }
 
-TEST(Metric, SingleElementHistoryEpochReset) {
-  SingleHistoryTestMetric int_metric;
+TEST(Metric, SingleValuetHistoryEpochReset) {
+  TwoElementHistoryTestMetric int_metric;
   DummyConsumer consumer;
 
   int_metric.AddValue(10);
@@ -90,31 +94,33 @@ TEST(Metric, SingleElementHistoryEpochReset) {
   ASSERT_TRUE(consumer.all_values().empty());
 }
 
-TEST(Metric, SingleElementHistoryWrap) {
-  SingleHistoryTestMetric int_metric;
+TEST(Metric, TwoValueElementHistoryWrap) {
+  TwoElementHistoryTestMetric int_metric;
   DummyConsumer consumer;
 
   int_metric.AddValue(10);
   int_metric.AddValue(11);
+  int_metric.AddValue(15);
 
   auto value = int_metric.MostRecent().ValueOrDie();
-  ASSERT_EQ(std::get<2>(value), 11);
+  ASSERT_EQ(std::get<2>(value), 15);
 
   int_metric.ConsumeHistoryAndEndEpoch(&consumer);
-  ASSERT_EQ(1, consumer.all_values().size());
-  ASSERT_EQ(value, consumer.all_values().at(0));
+  ASSERT_EQ(2, consumer.all_values().size());
+  ASSERT_EQ(value, consumer.all_values().at(1));
 }
 
-TEST(Metric, SingleElementHistoryWrapIdIncremental) {
-  SingleHistoryTestMetric int_metric;
+TEST(Metric, TwoValueElementHistoryWrapIdIncremental) {
+  TwoElementHistoryTestMetric int_metric;
 
+  int_metric.AddValue(9);
   int_metric.AddValue(10);
   auto value_one = int_metric.MostRecent().ValueOrDie();
-  uint64_t id_one = SingleHistoryTestMetric::Id(value_one);
+  uint64_t id_one = TwoElementHistoryTestMetric::Id(value_one);
 
   int_metric.AddValue(11);
   auto value_two = int_metric.MostRecent().ValueOrDie();
-  uint64_t id_two = SingleHistoryTestMetric::Id(value_two);
+  uint64_t id_two = TwoElementHistoryTestMetric::Id(value_two);
 
   ASSERT_TRUE(id_one < id_two);
 }
@@ -142,7 +148,7 @@ TEST(Metric, LongHistory) {
       ASSERT_EQ(i, std::get<2>(history.at(i)));
       uint64_t current_id = LongHistoryTestMetric::Id(history.at(i));
 
-      if (total_count != 0 || i != 0) {
+      if (current_id != 0 && (total_count != 0 || i != 0)) {
         ASSERT_TRUE(last_id < current_id);
       }
 
@@ -165,9 +171,9 @@ TEST(Metric, LongHistoryOverflow) {
   int_metric.ConsumeHistoryAndEndEpoch(&consumer);
   const auto& history = consumer.all_values();
 
-  ASSERT_EQ(1000, history.size());
-  for (size_t i = 0; i < 1000; ++i) {
-    ASSERT_EQ(9000 + i, std::get<2>(history.at(i)));
+  ASSERT_EQ(kLargeP2, history.size());
+  for (size_t i = 0; i < kLargeP2; ++i) {
+    ASSERT_EQ((10000 - kLargeP2) + i, std::get<2>(history.at(i)));
   }
 }
 
@@ -215,7 +221,7 @@ TEST(Metric, ThreadSafety) {
   }
 }
 
-typedef MetricManager<1000, uint32_t> DummyManager;
+typedef MetricManager<kLargeP2, uint32_t> DummyManager;
 
 TEST(MetricManager, StartStopEmpty) {
   auto metric_ptr = std::make_shared<LongHistoryTestMetric>();
