@@ -4,6 +4,7 @@
 #include <tuple>
 #include <array>
 #include <chrono>
+#include <mutex>
 
 #include "common.h"
 #include "periodic_runner.h"
@@ -64,7 +65,8 @@ class Metric {
 
   // The most recent value inserted this epoch. If there are no values inserted
   // non-ok status is returned.
-  ValueOrError<StampedMetricValue> MostRecent() const {
+  ValueOrError<StampedMetricValue> MostRecent() {
+    std::unique_lock<std::mutex> lock(mu_);
     if (id_ == 0) {
       return "History empty";
     }
@@ -73,39 +75,32 @@ class Metric {
     return values_[index];
   }
 
-  // A copy of the history. The returned vector will have at most kHistorySize
-  // elements.
-  std::vector<StampedMetricValue> HistoryCopy() const {
-    uint64_t size = kHistorySize;
-    uint64_t start = id_ - kHistorySize;
-    if (id_ < kHistorySize) {
-      size = id_;
-      start = 0;
-    }
-
-    std::vector<StampedMetricValue> return_vector;
-    return_vector.reserve(size);
-
-    for (uint64_t i = start; i < start + size; ++i) {
-      size_t index = i % kHistorySize;
-
-      return_vector.push_back(values_[index]);
-    }
-
-    return return_vector;
-  }
-
-  // Starts a new epoch and resets the history.
-  void NewEpoch() {
-    id_ = 0;
-    epoch_id_++;
-  }
-
   // Feeds the history to a consumer and ends the current epoch.
   void ConsumeHistoryAndEndEpoch(MetricConsumer<First, Rest...>* consumer) {
-    std::vector<StampedMetricValue> history = HistoryCopy();
+    std::vector<StampedMetricValue> history;
 
-    NewEpoch();
+    {
+      std::unique_lock<std::mutex> lock(mu_);
+
+      uint64_t size = kHistorySize;
+      uint64_t start = id_ - kHistorySize;
+      if (id_ < kHistorySize) {
+        size = id_;
+        start = 0;
+      }
+
+      history.reserve(size);
+
+      for (uint64_t i = start; i < start + size; ++i) {
+        size_t index = i % kHistorySize;
+        history.push_back(values_[index]);
+      }
+
+      // Reset the epoch.
+      id_ = 0;
+      epoch_id_++;
+    }
+
     consumer->ConsumeHistory(history);
   }
 
@@ -116,17 +111,20 @@ class Metric {
   // as opposed to virtual since it will potentially be called often.
   // Implementations should have their own AddValue method which calls this one.
   void ProtectedAddValue(First first, Rest ... rest) {
-    size_t index = id_ % kHistorySize;
-
     auto now = std::chrono::system_clock::now().time_since_epoch();
     uint64_t timestamp = std::chrono::duration_cast<std::chrono::seconds>(now)
         .count();
 
+    std::unique_lock<std::mutex> lock(mu_);
+    size_t index = id_ % kHistorySize;
     uint64_t id = static_cast<uint64_t>(epoch_id_) << 32 | ++id_;
     values_[index] = std::make_tuple(id, timestamp, first, rest...);
   }
 
  private:
+  // A mutex to protect the metric.
+  std::mutex mu_;
+
   // A unique id for values within the epoch.
   uint32_t id_;
 
