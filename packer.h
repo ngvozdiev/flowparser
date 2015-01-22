@@ -28,7 +28,7 @@ class PackedUintSeq {
   // difference between the last value and this value is too large (larger than
   // kEightByteLimit) or if the new value is smaller than the last appended
   // value (the sequence is not incrementing).
-  Status Append(uint64_t value);
+  void Append(uint64_t value, size_t* bytes);
 
   // Copies out the sequence in a standard vector.
   void Restore(std::vector<uint64_t>* vector) const;
@@ -149,10 +149,12 @@ class RLEField {
   }
 
   // Appends a new value to the sequence. "Well-behaved" sequences will occupy
-  // less memory and will be faster to add elements.
-  void Append(T value) {
+  // less memory and will be faster to add elements. If a new element is added
+  // the pointer 'bytes' will be incremented.
+  void Append(T value, size_t* bytes) {
     if (strides_.empty()) {
       strides_.push_back(Stride(value));
+      *bytes += sizeof(Stride);
       return;
     }
 
@@ -172,6 +174,7 @@ class RLEField {
     }
 
     strides_.push_back(Stride(value));
+    *bytes += sizeof(Stride);
   }
 
   // The amount of memory (in terms of bytes) used to store the sequence.

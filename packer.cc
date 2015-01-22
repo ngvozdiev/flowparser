@@ -6,34 +6,45 @@
 
 namespace flowparser {
 
-Status PackedUintSeq::Append(uint64_t value) {
+void PackedUintSeq::Append(uint64_t value, size_t* bytes) {
   if (value < last_append_) {
-    return "Sequence non-incrementing last is " + std::to_string(last_append_)
-        + " new is " + std::to_string(value);
+    throw std::logic_error(
+        "Sequence non-incrementing last is " + std::to_string(last_append_)
+            + " new is " + std::to_string(value));
   }
 
   const uint64_t diff = value - last_append_;
 
   if (diff < kOneByteLimit) {
     data_.push_back(diff);
+
+    *bytes += sizeof(uint8_t);
   } else if (diff < kTwoByteLimit) {
     data_.push_back((diff >> 8) | kTwoBytesPacked);
     data_.push_back(diff);
+
+    *bytes += 2 * sizeof(uint8_t);
   } else if (diff < kThreeByteLimit) {
     data_.push_back(((diff >> 16) | kThreeBytesPacked));
     data_.push_back(diff >> 8);
     data_.push_back(diff >> 0);
+
+    *bytes += 3 * sizeof(uint8_t);
   } else if (diff < kFourByteLimit) {
     data_.push_back((diff >> 24) | kFourBytesPacked);
     data_.push_back(diff >> 16);
     data_.push_back(diff >> 8);
     data_.push_back(diff);
+
+    *bytes += 4 * sizeof(uint8_t);
   } else if (diff < kFiveByteLimit) {
     data_.push_back((diff >> 32) | kFiveBytesPacked);
     data_.push_back(diff >> 24);
     data_.push_back(diff >> 16);
     data_.push_back(diff >> 8);
     data_.push_back(diff);
+
+    *bytes += 5 * sizeof(uint8_t);
   } else if (diff < kSixByteLimit) {
     data_.push_back((diff >> 40) | kSixBytesPacked);
     data_.push_back(diff >> 32);
@@ -41,6 +52,8 @@ Status PackedUintSeq::Append(uint64_t value) {
     data_.push_back(diff >> 16);
     data_.push_back(diff >> 8);
     data_.push_back(diff);
+
+    *bytes += 6 * sizeof(uint8_t);
   } else if (diff < kSevenByteLimit) {
     data_.push_back((diff >> 48) | kSevenBytesPacked);
     data_.push_back(diff >> 40);
@@ -49,6 +62,8 @@ Status PackedUintSeq::Append(uint64_t value) {
     data_.push_back(diff >> 16);
     data_.push_back(diff >> 8);
     data_.push_back(diff);
+
+    *bytes += 7 * sizeof(uint8_t);
   } else if (diff < kEightByteLimit) {
     data_.push_back((diff >> 56) | kEightBytesPacked);
     data_.push_back(diff >> 48);
@@ -58,13 +73,14 @@ Status PackedUintSeq::Append(uint64_t value) {
     data_.push_back(diff >> 16);
     data_.push_back(diff >> 8);
     data_.push_back(diff);
+
+    *bytes += 8 * sizeof(uint8_t);
   } else {
-    return "Difference too large " + std::to_string(diff);
+    throw std::runtime_error("Difference too large " + std::to_string(diff));
   }
 
   len_++;
   last_append_ = value;
-  return Status::kStatusOK;
 }
 
 size_t PackedUintSeq::DeflateSingleInteger(const size_t offset,

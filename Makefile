@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wextra -O2
+CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Werror -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wall -Wextra -O0
 GTEST_DIR = gtest
 GTEST_FLAGS=-isystem $(GTEST_DIR)/include
 LDFLAGS=-g -lpcap -pthread
@@ -8,21 +8,19 @@ GTEST_HEADERS = $(GTEST_DIR)/include/gtest/*.h \
                 $(GTEST_DIR)/include/gtest/internal/*.h
 GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/src/*.h $(GTEST_HEADERS)
 
-SRCS=flows.cc packer.cc common.cc parser.cc periodic_runner.cc flowparser.cc
+SRCS=flows.cc packer.cc common.cc parser.cc flowparser.cc
 OBJS=$(subst .cc,.o,$(SRCS))
 RM=rm -f
 
 gtest-all.o : $(GTEST_SRCS_)
-	$(CXX) $(GTEST_FLAGS) -I$(GTEST_DIR) $(CXXFLAGS) -c \
+	$(CXX) $(GTEST_FLAGS) -I$(GTEST_DIR) $(CXXFLAGS) -Wno-missing-field-initializers -c \
             $(GTEST_DIR)/src/gtest-all.cc
 
 gtest_main.o : $(GTEST_SRCS_)
-	$(CXX) $(GTEST_FLAGS) -I$(GTEST_DIR) $(CXXFLAGS) -c \
+	$(CXX) $(GTEST_FLAGS) -I$(GTEST_DIR) $(CXXFLAGS) -Wno-missing-field-initializers -c \
             $(GTEST_DIR)/src/gtest_main.cc
 
 common.o: common.cc common.h
-
-periodic_runner.o: periodic_runner.cc periodic_runner.h
 
 packer.o: packer.cc packer.h common.o
 
@@ -30,7 +28,7 @@ flows.o: flows.cc flows.h common.o packer.o
 
 parser.o: parser.cc parser.h flows.o
 
-flowparser.o: flowparser.cc flowparser.h parser.o periodic_runner.o
+flowparser.o: flowparser.cc flowparser.h parser.o
 
 # Tests
 flows_test.o: flows_test.cc common_test.h flows.o
@@ -49,24 +47,6 @@ parser_test.o: parser_test.cc common_test.h parser.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c parser_test.cc
 
 parser_test: parser_test.o gtest_main.o gtest-all.o $(OBJS)
-	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
-
-periodic_runner_test.o: periodic_runner_test.cc periodic_runner.o
-	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c periodic_runner_test.cc
-
-periodic_runner_test: periodic_runner_test.o gtest_main.o gtest-all.o $(OBJS)
-	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
-
-metric_test.o: metric_test.cc common.o
-	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c metric_test.cc
-
-metric_test: metric_test.o gtest_main.o gtest-all.o $(OBJS)
-	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
-
-logger_test.o: logger_test.cc common.o logger.h
-	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c logger_test.cc
-
-logger_test: logger_test.o gtest_main.o gtest-all.o $(OBJS)
 	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
 
 flowparser_test.o: flowparser_test.cc flowparser.o

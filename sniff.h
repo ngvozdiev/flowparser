@@ -3,20 +3,17 @@
 #ifndef FLOWPARSER_SNIFF_H
 #define	FLOWPARSER_SNIFF_H
 
-#include <pcap.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netinet/ip.h>
-#include <netinet/udp.h>
-#include <netinet/ip_icmp.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+#include <sys/_types/_size_t.h>
+#include <sys/socket.h>
+#include <cstdint>
+#include <iostream>
+#include <string>
 
 namespace flowparser {
 namespace pcap {
@@ -43,6 +40,13 @@ struct SniffUnknown {
 };
 
 }  // namespace pcap
+
+static std::string IPToString(uint32_t ip) {
+  char str[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &ip, str, INET_ADDRSTRLEN);
+  return std::string(str);
+}
+
 }  // namespace flowparser
 
 #endif	/* FLOWPARSER_SNIFF_H */

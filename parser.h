@@ -6,126 +6,31 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <list>
 
 #include "common.h"
 #include "sniff.h"
 #include "flows.h"
+#include "ptr_queue.h"
 
 namespace flowparser {
 
-static std::string IPToString(uint32_t ip) {
-  char str[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &ip, str, INET_ADDRSTRLEN);
-  return std::string(str);
-}
-
-// Each flow is indexed by this value. Note that it does not contain a flow
-// type. Only two flow types are supported - TCP and UDP and each has a
-// separate map.
-class FlowKey {
- public:
-  FlowKey(const FlowKey& other)
-      : src_(other.src_),
-        dst_(other.dst_),
-        sport_(other.sport_),
-        dport_(other.dport_) {
+struct ParserConfig {
+  ParserConfig()
+      : soft_mem_limit(1 << 27) {
   }
 
-  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header)
-      : src_(ip_header.ip_src.s_addr),
-        dst_(ip_header.ip_dst.s_addr),
-        sport_(tcp_header.th_sport),
-        dport_(tcp_header.th_dport) {
-  }
+  // Below this threshold no flows are forcibly evicted - they are kept in
+  // memory forever.
+  uint64_t soft_mem_limit;
 
-  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header)
-      : src_(ip_header.ip_src.s_addr),
-        dst_(ip_header.ip_dst.s_addr),
-        sport_(udp_header.uh_sport),
-        dport_(udp_header.uh_dport) {
-  }
-
-  // In the case of ICMP a flow is considered to be all packets between the same
-  // pair of endpoints (since there are no port numbers in ICMP)
-  FlowKey(const pcap::SniffIp& ip_header, const pcap::SniffIcmp& icmp_header)
-      : src_(ip_header.ip_src.s_addr),
-        dst_(ip_header.ip_dst.s_addr),
-        sport_(0),
-        dport_(0) {
-    ignore(icmp_header);
-  }
-
-  // Unknown transport traffic session is between the same pair of endpoints.
-  FlowKey(const pcap::SniffIp& ip_header,
-          const pcap::SniffUnknown& unknown_header)
-      : src_(ip_header.ip_src.s_addr),
-        dst_(ip_header.ip_dst.s_addr),
-        sport_(0),
-        dport_(0) {
-    ignore(unknown_header);
-  }
-
-  bool operator==(const FlowKey &other) const {
-    return (src_ == other.src_ && dst_ == other.dst_ && sport_ == other.sport_
-        && dport_ == other.dport_);
-  }
-
-  std::string ToString() const {
-    return "(src='" + IPToString(src_) + "', dst='" + IPToString(dst_)
-        + "', src_port=" + std::to_string(src_port()) + ", dst_port="
-        + std::to_string(dst_port()) + ")";
-  }
-
-  // The source IP address of the flow (in host byte order)
-  uint32_t src() const {
-    return ntohl(src_);
-  }
-
-  // The destination IP address of the flow (in host byte order)
-  uint32_t dst() const {
-    return ntohl(dst_);
-  }
-
-  // A string representation of the source address.
-  std::string SrcToString() const {
-    return IPToString(src_);
-  }
-
-  // A string representation of the destination address.
-  std::string DstToString() const {
-    return IPToString(dst_);
-  }
-
-  // The source port of the flow (in host byte order)
-  uint16_t src_port() const {
-    return ntohs(sport_);
-  }
-
-  // The destination port of the flow (in host byte order)
-  uint16_t dst_port() const {
-    return ntohs(dport_);
-  }
-
-  size_t hash() const {
-    size_t result = 17;
-    result = 37 * result + src_;
-    result = 37 * result + dst_;
-    result = 37 * result + sport_;
-    result = 37 * result + dport_;
-    return result;
-  }
-
- private:
-  const uint32_t src_;
-  const uint32_t dst_;
-  const uint16_t sport_;
-  const uint16_t dport_;
+  // All new flows will get instantiated with this config.
+  FlowConfig new_flow_config;
 };
 
-struct KeyHasher {
-  size_t operator()(const FlowKey& k) const {
-    return k.hash();
-  }
+struct ParserInfo {
+  uint64_t first_rx = 0;
+  uint64_t last_rx = 0;
 };
 
 using std::function;
@@ -133,109 +38,176 @@ using std::pair;
 using std::unique_ptr;
 
 // The main parser class. This class stores tables with flow data and owns all
-// flow instances. The first type is the flow class that will be stored, the
-// second is the transport header from pcap.
-template<typename T, typename P>
+// flow instances.
 class Parser {
  public:
-  typedef function<void(const FlowKey&, unique_ptr<T>)> FlowCallback;
+  typedef PtrQueue<Flow, 1 << 10> FlowQueue;
 
-  Parser(FlowCallback callback, uint64_t timeout, uint64_t soft_mem_limit,
-         uint64_t hard_mem_limit)
-      : flow_timeout_(timeout),
-        soft_mem_limit_(soft_mem_limit),
-        hard_mem_limit_(hard_mem_limit),
-        last_rx_(0),
-        callback_(callback) {
+  Parser(const ParserConfig& parser_config, std::shared_ptr<FlowQueue> queue)
+      : parser_config(parser_config),
+        mem_usage_(0),
+        queue_(queue),
+        first_rx_(0),
+        last_rx_(std::numeric_limits<uint64_t>::max()) {
   }
 
-  // Called when a new TCP packet arrives.
-  Status HandlePkt(const pcap::SniffIp& ip_header, const P& transport_header,
-                   uint64_t timestamp);
+  void TCPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header,
+               uint64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Flow* flow = FindOrNewFlow(timestamp, { ip_header, tcp_header.th_sport,
+                                   tcp_header.th_dport });
+    flow->TCPIpRx(ip_header, tcp_header, timestamp, &mem_usage_);
+    CollectIfLimitExceeded();
+  }
 
-  // Times out flows that have expired.
-  void CollectFlows() {
-    auto mem_and_min_rx_time = TotalMemAndDeltaRx();
-    uint64_t total_mem = mem_and_min_rx_time.first;
-    uint64_t time_delta = mem_and_min_rx_time.second;
+  void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
+               uint64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Flow* flow = FindOrNewFlow(timestamp, { ip_header, udp_header.uh_sport,
+                                   udp_header.uh_dport });
+    flow->UDPIpRx(ip_header, udp_header, timestamp, &mem_usage_);
+    CollectIfLimitExceeded();
+  }
 
-    if (total_mem < soft_mem_limit_) {
-      PrivateCollectFlows(
-          [this](const T& flow) {return flow.TimeLeft(last_rx_) <= 0;});
-    } else {
-      uint64_t hm = hard_mem_limit_;
-      if (total_mem > hard_mem_limit_) {
-        hm = total_mem;
-      }
+  void ICMPIpRx(const pcap::SniffIp& ip_header,
+                const pcap::SniffIcmp& icmp_header, uint64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
+    flow->ICMPIpRx(ip_header, icmp_header, timestamp, &mem_usage_);
+    CollectIfLimitExceeded();
+  }
 
-      double limit = (total_mem - soft_mem_limit_)
-          / static_cast<double>(hm - soft_mem_limit_);
+  void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
+    flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
+    CollectIfLimitExceeded();
+  }
 
-      PrivateCollectFlows([this, limit, time_delta](const T& flow)
-      {
-        // The idea is to time out a fraction of the flows that is proportional
-        // to how much out of memory we are, starting with the ones that have
-        // not seen traffic recently.
-          double timeout_fraction =
-          1 - (last_rx_ - flow.last_rx()) / static_cast<double>(time_delta);
-          if (time_delta == 0) {
-            timeout_fraction = 1;
-          }
+  ParserInfo GetInfo() const {
+    ParserInfo info;
 
-          return timeout_fraction <= limit;
-        });
+    std::lock_guard<std::mutex> lock(mu_);
+    info.first_rx = first_rx_;
+    info.last_rx = last_rx_;
+
+    return info;
+  }
+
+  // Collects all flows
+  void CollectAllFlows() {
+    while (!flows_.empty()) {
+      std::cout << "FS " << flows_.size() << " mem " << mem_usage_ << " flow size " << sizeof(Flow) << "\n";
+      CollectLast();
     }
   }
 
-  // Times out all flow regardless of how close they are to expiring.
-  void CollectAllFlows() {
-    PrivateCollectFlows([](const T&) {return true;});
+ private:
+  typedef std::list<std::unique_ptr<Flow>> FlowList;
+  typedef std::unordered_map<FlowKey, typename FlowList::iterator, KeyHasher> FlowMap;
+
+  // Collects the least recently accessed flow.
+  void CollectLast() {
+    if (flows_.empty()) {
+      return;
+    }
+
+    std::cout << "flows " << flows_.size() << "e " << flows_.empty() << "\n";
+    std::unique_ptr<Flow> flow = std::move(flows_.back());
+    std::cout << "flows " << flows_.size() << "e " << flows_.empty() << "\n";
+    std::cout << "at " << flows_.back().get() << "\n";
+    flows_.pop_back();
+
+    flows_table_.erase(flow->key());
+    mem_usage_ -= (sizeof(Flow) + flow->SizeBytes());
+
+    if (queue_) {
+      queue_->ProduceOrThrow(std::move(flow));
+    }
   }
 
- private:
-  // Returns a tuple, the first element is the total amount of memory used by
-  // the parser and the second one is the maximum difference between the minimum
-  // last_rx_time among all flows and the parser's last_rx_time.
-  std::pair<uint64_t, uint64_t> TotalMemAndDeltaRx();
+  // Collects one or more flows to make sure they obey
+  void CollectIfLimitExceeded() {
+    if (mem_usage_ > parser_config.soft_mem_limit) {
+      CollectLast();
+    }
+  }
 
-  // Performs a collection. Each flow is considered for collection based on an
-  // evaluation function that is given the remaining amount of time that the
-  // flow has until it expires.
-  void PrivateCollectFlows(std::function<bool(const T&)> eval_for_collection);
+  Flow* FindOrNewFlow(uint64_t timestamp, const FlowKey& key) {
+    const auto& it = flows_table_.find(key);
+    if (it != flows_table_.end()) {
+      // Move the flow to the front of the list
+      flows_.splice(flows_.begin(), flows_, it->second, std::next(it->second));
 
-  // How long to wait before collecting flows. This is not in real time, but in
-  // time measured as per pcap timestamps. This means that "time" has whatever
-  // precision the pcap timestamps give (usually microseconds) and only advances
-  // when packets are received.
-  const uint64_t flow_timeout_;
+      return it->second->get();
+    }
 
-  // Below this threshold no flows are forcibly evicted - they are kept in
-  // memory until they time out.
-  const uint64_t soft_mem_limit_;
+    auto flow_ptr = std::make_unique<Flow>(timestamp, key,
+                                           parser_config.new_flow_config);
+    mem_usage_ += sizeof(Flow);
 
-  // Above the soft limit and up to the hard limit flows are progressively more
-  // likely to get forcibly evicted when a collection happens.
-  const uint64_t hard_mem_limit_;
+    flows_.push_front(std::move(flow_ptr));
+    flows_table_.insert(std::make_pair(key, flows_.begin()));
+    return flows_.begin()->get();
+  }
 
-  // Last time a packet was received.
-  uint64_t last_rx_;
+  // Configuration for the parser
+  const ParserConfig parser_config;
+
+  // Memory used in bytes
+  size_t mem_usage_;
 
   // A map to store flows.
-  std::unordered_map<FlowKey, std::unique_ptr<T>, KeyHasher> flows_table_;
+  FlowMap flows_table_;
 
-  // A mutex for the flows table.
-  std::mutex flows_table_mutex_;
+  // A list of flows, in LRU order.
+  FlowList flows_;
 
-  // When a TCP flow is complete it gets handed to this callback.
-  const FlowCallback callback_;
+  // When a flow is evicted it is added to this queue.
+  std::shared_ptr<FlowQueue> queue_;
+
+  // Timestamp of first packet reception
+  uint64_t first_rx_;
+
+  // Timestamp of most recent packet reception
+  uint64_t last_rx_;
+
+  // A mutex
+  mutable std::mutex mu_;
+
+  friend class ParserIterator;
 
   DISALLOW_COPY_AND_ASSIGN(Parser);
 };
 
-typedef Parser<TCPFlow, pcap::SniffTcp> TCPFlowParser;
-typedef Parser<UDPFlow, pcap::SniffUdp> UDPFlowParser;
-typedef Parser<ICMPFlow, pcap::SniffIcmp> ICMPFlowParser;
-typedef Parser<UnknownFlow, pcap::SniffUnknown> UnknownFlowParser;
+class ParserIterator {
+ public:
+  ParserIterator(Parser& parser)
+      : lock_guard_(parser.mu_),
+        it_(parser.flows_table_.begin()),
+        end_it_(parser.flows_table_.end()) {
+  }
+
+  const Flow* Next() {
+    if (it_ == end_it_) {
+      return nullptr;
+    }
+
+    return ((it_)++)->second->get();
+  }
+
+ private:
+  // A lock to keep the mutex until the iterator object goes out of scope.
+  const std::lock_guard<std::mutex> lock_guard_;
+
+  // Iterator into the flow table.
+  typename Parser::FlowMap::iterator it_;
+
+  // The end of the flow table.
+  typename Parser::FlowMap::iterator end_it_;
+
+  DISALLOW_COPY_AND_ASSIGN(ParserIterator);
+};
 
 }
 

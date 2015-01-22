@@ -63,15 +63,16 @@ static void AddToSummary(const FlowKey& key, const FlowInfo& info,
     std::swap(src, dst);
   }
 
-  (*map)[ { src, dst }] += info.size_pkts;
+  (*map)[ { src, dst }] += info.pkts_seen;
 }
 
 static size_t CountPkts(const Flow& flow) {
   FlowIterator it(flow);
-  IPHeader dummy;
+
+  const TrackedFields* fields = nullptr;
 
   size_t count = 0;
-  while (it.Next(&dummy)) {
+  while ((fields = it.NextOrNull()) != nullptr) {
     count++;
   }
 
@@ -84,13 +85,13 @@ class FlowParserFixture : public ::testing::Test {
   void SetUp() override {
     cfg_.OfflineTrace("test_data/output_dump");
 
-    cfg_.BadStatusCallback(
-        [this](Status status) {bad_statuses_.push_back(status);});
+    cfg_.ExceptionCallback(
+        [this](const std::exception& ex) {parsing_exceptions_.push_back(ex);});
     cfg_.InfoCallback([](const string&) {});
   }
 
   FlowParserConfig cfg_;
-  std::vector<Status> bad_statuses_;
+  std::vector<std::exception> parsing_exceptions_;
 };
 
 // Tests that opening a bad file fails.
@@ -98,16 +99,16 @@ TEST_F(FlowParserFixture, BadFileOpen) {
   cfg_.OfflineTrace("test_data/some_missing_dummy_file");
 
   FlowParser fp(cfg_);
-  ASSERT_FALSE(fp.RunTrace().ok());
+  ASSERT_THROW(fp.RunTrace(), std::exception);
 }
 
 TEST_F(FlowParserFixture, FirstLastTimestamps) {
   FlowParser fp(cfg_);
-  ASSERT_TRUE(fp.RunTrace().ok());
-  ASSERT_TRUE(bad_statuses_.empty());
+  fp.RunTrace();
+  ASSERT_TRUE(parsing_exceptions_.empty());
 
-  uint64_t first_rx = fp.first_rx();
-  uint64_t last_rx = fp.last_rx();
+  uint64_t first_rx = fp.parser().GetInfo().first_rx;
+  uint64_t last_rx = fp.parser().GetInfo().last_rx;
 
   ASSERT_EQ(first_rx, 1369832230607047UL);
   ASSERT_EQ(last_rx, 1369832230644311UL);
@@ -123,19 +124,17 @@ TEST_F(FlowParserFixture, EndToEnd) {
 
   ParseSummary("test_data/summary.csv", &model_map);
 
-  cfg_.TCPCallback([&map](const FlowKey& key, unique_ptr<TCPFlow> flow) {
-    AddToSummary(key, flow->GetInfo(), &map);});
-  cfg_.UDPCallback([&map](const FlowKey& key, unique_ptr<UDPFlow> flow) {
-    AddToSummary(key, flow->GetInfo(), &map);});
-  cfg_.ICMPCallback([&map](const FlowKey& key, unique_ptr<ICMPFlow> flow) {
-    AddToSummary(key, flow->GetInfo(), &map);});
-  cfg_.UnknownCallback(
-      [&map](const FlowKey& key, unique_ptr<UnknownFlow> flow) {
-        AddToSummary(key, flow->GetInfo(), &map);});
+  auto queue_ptr = std::make_shared<Parser::FlowQueue>();
+  cfg_.FlowQueue(queue_ptr);
 
   FlowParser fp(cfg_);
-  ASSERT_TRUE(fp.RunTrace().ok());
-  ASSERT_TRUE(bad_statuses_.empty());
+  fp.RunTrace();
+  ASSERT_TRUE(parsing_exceptions_.empty());
+
+  while (queue_ptr->size()) {
+    std::unique_ptr<Flow> flow_ptr = queue_ptr->ConsumeOrThrow();
+    AddToSummary(flow_ptr->key(), flow_ptr->GetInfo(), &map);
+  }
 
   ASSERT_EQ(model_map, map);
 }
@@ -144,19 +143,17 @@ TEST_F(FlowParserFixture, EndToEnd) {
 TEST_F(FlowParserFixture, IteratorPacketCount) {
   size_t count = 0;
 
-  cfg_.TCPCallback([&count](const FlowKey& key, unique_ptr<TCPFlow> flow) {
-    count += CountPkts(*flow);});
-  cfg_.UDPCallback([&count](const FlowKey& key, unique_ptr<UDPFlow> flow) {
-    count += CountPkts(*flow);});
-  cfg_.ICMPCallback([&count](const FlowKey& key, unique_ptr<ICMPFlow> flow) {
-    count += CountPkts(*flow);});
-  cfg_.UnknownCallback(
-      [&count](const FlowKey& key, unique_ptr<UnknownFlow> flow) {
-        count += CountPkts(*flow);});
+  auto queue_ptr = std::make_shared<Parser::FlowQueue>();
+  cfg_.FlowQueue(queue_ptr);
 
   FlowParser fp(cfg_);
-  ASSERT_TRUE(fp.RunTrace().ok());
-  ASSERT_TRUE(bad_statuses_.empty());
+  fp.RunTrace();
+  ASSERT_TRUE(parsing_exceptions_.empty());
+
+  while (queue_ptr->size()) {
+    std::unique_ptr<Flow> flow_ptr = queue_ptr->ConsumeOrThrow();
+    count += CountPkts(*flow_ptr);
+  }
 
   // The trace also has 24 IPv6 packets that we are not seeing - the default
   // BPF filter is "ip"
@@ -181,6 +178,7 @@ TEST_F(FlowParserFixture, SingleTCPFlow) {
 
   // The flow is from 181.175.235.116:80 -> 71.126.3.230:65470
   pcap::SniffIp ip;
+  ip.ip_p = 0x06;
   inet_aton("181.175.235.116", &ip.ip_src);
   inet_aton("71.126.3.230", &ip.ip_dst);
 
@@ -188,40 +186,41 @@ TEST_F(FlowParserFixture, SingleTCPFlow) {
   tcp.th_sport = htons(80);
   tcp.th_dport = htons(65470);
 
-  FlowKey key_model(ip, tcp);
+  const FlowKey key_model(ip, tcp.th_sport, tcp.th_dport);
+  std::vector<TrackedFields> fields;
 
-  std::vector<IPHeader> ip_headers;
-  std::vector<TCPHeader> tcp_headers;
-
-  cfg_.TCPCallback([&key_model, &ip_headers, &tcp_headers]
-  (const FlowKey& key, unique_ptr<TCPFlow> flow) {
-    if (key == key_model) {
-      TCPFlowIterator it(*flow);
-
-      IPHeader ip_header;
-      TCPHeader tcp_header;
-      while (it.Next(&ip_header, &tcp_header)) {
-        ip_headers.push_back(ip_header);
-        tcp_headers.push_back(tcp_header);
-      }
-    }
-  });
+  auto queue_ptr = std::make_shared<Parser::FlowQueue>();
+  cfg_.FlowQueue(queue_ptr);
 
   FlowParser fp(cfg_);
-  ASSERT_TRUE(fp.RunTrace().ok());
-  ASSERT_TRUE(bad_statuses_.empty());
+  fp.RunTrace();
+  ASSERT_TRUE(parsing_exceptions_.empty());
 
-  ASSERT_EQ(10, ip_headers.size());
+  while (queue_ptr->size()) {
+    std::unique_ptr<Flow> flow_ptr = queue_ptr->ConsumeOrThrow();
+    if (flow_ptr->key() != key_model) {
+      continue;
+    }
+
+    FlowIterator it(*flow_ptr);
+
+    const TrackedFields* fields_from_iterator = nullptr;
+    while ((fields_from_iterator = it.NextOrNull()) != nullptr) {
+      fields.push_back(*fields_from_iterator);
+    }
+  }
+
+  ASSERT_EQ(10, fields.size());
 
   for (size_t i = 0; i < 10; ++i) {
-    ASSERT_EQ(len_model[i], ip_headers[i].length);
-    ASSERT_EQ(id_model[i], ip_headers[i].id);
-    ASSERT_EQ(ttl_model[i], ip_headers[i].ttl);
+    ASSERT_EQ(len_model[i], fields[i].ip_len());
+    ASSERT_EQ(id_model[i], fields[i].ip_id());
+    ASSERT_EQ(ttl_model[i], fields[i].ip_ttl());
 
-    ASSERT_EQ(seq_relative_to + seq_model[i], tcp_headers[i].seq);
-    ASSERT_EQ(ack_model[i], tcp_headers[i].ack);
-    ASSERT_EQ(win_model[i], tcp_headers[i].win);
-    ASSERT_EQ(flags_model[i], tcp_headers[i].flags);
+    ASSERT_EQ(seq_relative_to + seq_model[i], fields[i].tcp_seq());
+    ASSERT_EQ(ack_model[i], fields[i].tcp_ack());
+    ASSERT_EQ(win_model[i], fields[i].tcp_win());
+    ASSERT_EQ(flags_model[i], fields[i].tcp_flags());
   }
 }
 
