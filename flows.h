@@ -363,7 +363,7 @@ class FlowIterator {
   // Populates the given struct with the next header from the flow. If there are
   // no more headers false is returned.
   const TrackedFields* NextOrNull() {
-    if (i_ == max_) {
+    if (i_++ == max_) {
       return nullptr;
     }
 

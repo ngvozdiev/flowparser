@@ -3,7 +3,7 @@
 #include "gtest/gtest.h"
 #include "ptr_queue.h"
 
-namespace pathfinder {
+namespace flowparser {
 namespace test {
 
 TEST(SmallQueue, Empty) {

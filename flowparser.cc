@@ -165,11 +165,11 @@ void FlowParser::PcapLoop() {
                       reinterpret_cast<u_char*>(this));
       if (ret == 0) {
         config_.info_callback_("Done reading from " + config_.source_);
+      } else {
+        throw std::logic_error(
+            "Error while reading from " + config_.source_ + ", pcap said: "
+                + std::string(pcap_geterr(pcap_handle_)));
       }
-
-      throw std::logic_error(
-          "Error while reading from " + config_.source_ + ", pcap said: "
-              + std::string(pcap_geterr(pcap_handle_)));
     } else {
       config_.info_callback_("Will start listening on " + config_.source_);
 

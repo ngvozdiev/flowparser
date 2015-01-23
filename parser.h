@@ -58,6 +58,7 @@ class Parser {
                                    tcp_header.th_dport });
     flow->TCPIpRx(ip_header, tcp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
+    UpdateFirsLastRx(timestamp);
   }
 
   void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
@@ -67,6 +68,7 @@ class Parser {
                                    udp_header.uh_dport });
     flow->UDPIpRx(ip_header, udp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
+    UpdateFirsLastRx(timestamp);
   }
 
   void ICMPIpRx(const pcap::SniffIp& ip_header,
@@ -75,6 +77,7 @@ class Parser {
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
     flow->ICMPIpRx(ip_header, icmp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
+    UpdateFirsLastRx(timestamp);
   }
 
   void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
@@ -82,6 +85,7 @@ class Parser {
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
     flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
+    UpdateFirsLastRx(timestamp);
   }
 
   ParserInfo GetInfo() const {
@@ -96,9 +100,13 @@ class Parser {
 
   // Collects all flows
   void CollectAllFlows() {
+    std::lock_guard<std::mutex> lock(mu_);
     while (!flows_.empty()) {
-      std::cout << "FS " << flows_.size() << " mem " << mem_usage_ << " flow size " << sizeof(Flow) << "\n";
       CollectLast();
+    }
+
+    if (queue_) {
+      queue_->Close();
     }
   }
 
@@ -112,17 +120,15 @@ class Parser {
       return;
     }
 
-    std::cout << "flows " << flows_.size() << "e " << flows_.empty() << "\n";
     std::unique_ptr<Flow> flow = std::move(flows_.back());
-    std::cout << "flows " << flows_.size() << "e " << flows_.empty() << "\n";
-    std::cout << "at " << flows_.back().get() << "\n";
+    flows_table_.erase(flow->key());
     flows_.pop_back();
 
-    flows_table_.erase(flow->key());
+
     mem_usage_ -= (sizeof(Flow) + flow->SizeBytes());
 
     if (queue_) {
-      queue_->ProduceOrThrow(std::move(flow));
+      queue_->ProduceOrBlock(std::move(flow));
     }
   }
 
@@ -137,7 +143,7 @@ class Parser {
     const auto& it = flows_table_.find(key);
     if (it != flows_table_.end()) {
       // Move the flow to the front of the list
-      flows_.splice(flows_.begin(), flows_, it->second, std::next(it->second));
+      //flows_.splice(flows_.begin(), flows_, it->second, std::next(it->second));
 
       return it->second->get();
     }
@@ -149,6 +155,14 @@ class Parser {
     flows_.push_front(std::move(flow_ptr));
     flows_table_.insert(std::make_pair(key, flows_.begin()));
     return flows_.begin()->get();
+  }
+
+  void UpdateFirsLastRx(uint64_t timestamp) {
+    if (first_rx_ == 0) {
+      first_rx_ = timestamp;
+    }
+
+    last_rx_ = timestamp;
   }
 
   // Configuration for the parser
