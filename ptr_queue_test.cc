@@ -1,10 +1,16 @@
 #include <atomic>
+#include <thread>
+#include <map>
 
 #include "gtest/gtest.h"
 #include "ptr_queue.h"
 
 namespace flowparser {
 namespace test {
+
+template <typename T>
+void Unused(T &&)
+{ }
 
 TEST(SmallQueue, Empty) {
   PtrQueue<int, 2> small_queue;
@@ -16,8 +22,8 @@ TEST(SmallQueue, ProduceAfterClose) {
   PtrQueue<int, 2> small_queue;
 
   small_queue.Close();
-  ASSERT_FALSE(small_queue.Produce(std::make_unique<int>(1)).ok());
-  ASSERT_FALSE(small_queue.Consume().ok());
+  ASSERT_THROW(small_queue.ProduceOrBlock(std::make_unique<int>(1)),
+               std::exception);
   ASSERT_EQ(0, small_queue.size());
 }
 
@@ -25,33 +31,33 @@ TEST(SmallQueue, ConsumeAfterClose) {
   PtrQueue<int, 2> small_queue;
 
   small_queue.Close();
-  ASSERT_FALSE(small_queue.Consume().ok());
+  ASSERT_FALSE(small_queue.ConsumeOrBlock().get());
   ASSERT_EQ(0, small_queue.size());
 }
 
 TEST(SmallQueue, ProduceConsumeOne) {
   PtrQueue<int, 2> small_queue;
 
-  small_queue.Produce(std::make_unique<int>(1));
+  small_queue.ProduceOrBlock(std::make_unique<int>(1));
   ASSERT_EQ(1, small_queue.size());
 
-  auto result = small_queue.Consume();
-  ASSERT_EQ(1, *result.ValueOrDie());
+  auto result = small_queue.ConsumeOrBlock();
+  ASSERT_EQ(1, *result);
   ASSERT_EQ(0, small_queue.size());
 }
 
 TEST(SmallQueue, ProduceConsumeTwo) {
   PtrQueue<int, 2> small_queue;
 
-  small_queue.Produce(std::make_unique<int>(1));
-  small_queue.Produce(std::make_unique<int>(2));
+  small_queue.ProduceOrBlock(std::make_unique<int>(1));
+  small_queue.ProduceOrBlock(std::make_unique<int>(2));
 
   ASSERT_EQ(2, small_queue.size());
 
-  auto result_one = small_queue.Consume();
-  auto result_two = small_queue.Consume();
-  ASSERT_EQ(1, *result_one.ValueOrDie());
-  ASSERT_EQ(2, *result_two.ValueOrDie());
+  auto result_one = small_queue.ConsumeOrBlock();
+  auto result_two = small_queue.ConsumeOrBlock();
+  ASSERT_EQ(1, *result_one);
+  ASSERT_EQ(2, *result_two);
   ASSERT_EQ(0, small_queue.size());
 }
 
@@ -59,14 +65,14 @@ TEST(SmallQueue, ProduceConsumeSeq) {
   PtrQueue<int, 2> small_queue;
 
   for (size_t i = 1; i <= 10000; i++) {
-    small_queue.Produce(std::make_unique<int>(i));
+    small_queue.ProduceOrBlock(std::make_unique<int>(i));
 
     if (i % 2 == 0) {
-      auto result_one = small_queue.Consume();
-      auto result_two = small_queue.Consume();
+      auto result_one = small_queue.ConsumeOrBlock();
+      auto result_two = small_queue.ConsumeOrBlock();
 
-      ASSERT_EQ(i - 1, *result_one.ValueOrDie());
-      ASSERT_EQ(i, *result_two.ValueOrDie());
+      ASSERT_EQ(i - 1, *result_one);
+      ASSERT_EQ(i, *result_two);
     }
   }
 
@@ -76,15 +82,15 @@ TEST(SmallQueue, ProduceConsumeSeq) {
 TEST(SmallQueue, ProduceInvalidateConsume) {
   PtrQueue<int, 4> small_queue;
 
-  small_queue.Produce(std::make_unique<int>(1));
-  small_queue.Produce(std::make_unique<int>(2));
-  small_queue.Produce(std::make_unique<int>(3));
+  small_queue.ProduceOrBlock(std::make_unique<int>(1));
+  small_queue.ProduceOrBlock(std::make_unique<int>(2));
+  small_queue.ProduceOrBlock(std::make_unique<int>(3));
 
   small_queue.Invalidate([](const int& value) {return value == 1;});
   small_queue.Invalidate([](const int& value) {return value == 2;});
 
-  auto result = small_queue.Consume();
-  ASSERT_EQ(3, *result.ValueOrDie());
+  auto result = small_queue.ConsumeOrBlock();
+  ASSERT_EQ(3, *result);
 
   ASSERT_EQ(0, small_queue.size());
 }
@@ -97,14 +103,14 @@ TEST(SmallQueue, ProduceKill) {
     small_queue.Close();
   });
 
-  small_queue.Produce(std::make_unique<int>(1));
-  small_queue.Produce(std::make_unique<int>(2));
+  small_queue.ProduceOrBlock(std::make_unique<int>(1));
+  small_queue.ProduceOrBlock(std::make_unique<int>(2));
 
   // should block until the queue is closed.
-  auto result = small_queue.Produce(std::make_unique<int>(3));
+  ASSERT_THROW(small_queue.ProduceOrBlock(std::make_unique<int>(3)),
+               std::exception);
 
   thread.join();
-  ASSERT_FALSE(result.ok());
 
   // There are still two elements in the queue
   ASSERT_EQ(2, small_queue.size());
@@ -119,10 +125,10 @@ TEST(SmallQueue, ConsumeKill) {
   });
 
   // should block until the queue is closed.
-  auto result = small_queue.Consume();
+  auto result = small_queue.ConsumeOrBlock();
 
   thread.join();
-  ASSERT_FALSE(result.ok());
+  ASSERT_FALSE(result);
   ASSERT_EQ(0, small_queue.size());
 }
 
@@ -134,15 +140,15 @@ TEST(SmallQueue, InvalidateAllKill) {
     small_queue.Close();
   });
 
-  small_queue.Produce(std::make_unique<int>(1));
-  small_queue.Produce(std::make_unique<int>(2));
+  small_queue.ProduceOrBlock(std::make_unique<int>(1));
+  small_queue.ProduceOrBlock(std::make_unique<int>(2));
 
-  small_queue.Invalidate([](const int& value) {return true;});
+  small_queue.Invalidate([](const int& value) {Unused(value); return true;});
 
-  auto result = small_queue.Consume();  // will block until closed
+  auto result = small_queue.ConsumeOrBlock();  // will block until closed
 
   thread.join();
-  ASSERT_FALSE(result.ok());
+  ASSERT_FALSE(result);
   ASSERT_EQ(0, small_queue.size());
 }
 
@@ -153,7 +159,7 @@ TEST(LargeQueue, MultiProducer) {
   for (size_t thread_num = 0; thread_num < 16; thread_num++) {
     threads.push_back(std::thread([&large_queue] {
       for (size_t count = 0; count < ((1 << 20) / 16); count++) {
-        large_queue->Produce(std::make_unique<int>(count));
+        large_queue->ProduceOrBlock(std::make_unique<int>(count));
       }
     }));
   }
@@ -166,8 +172,8 @@ TEST(LargeQueue, MultiProducer) {
 
   std::map<int, int> model;
   for (size_t count = 0; count < (1 << 20); count++) {
-    auto result = large_queue->Consume();
-    int value = *result.ValueOrDie();
+    auto result = large_queue->ConsumeOrBlock();
+    int value = *result;
 
     model[value] += 1;
   }
@@ -188,7 +194,7 @@ TEST(LargeQueue, MultiProducerMultiConsumer) {
   for (size_t thread_num = 0; thread_num < 16; thread_num++) {
     producer_threads.push_back(std::thread([&large_queue] {
       for (size_t count = 0; count < ((1 << 20) / 16); count++) {
-        large_queue->Produce(std::make_unique<uint64_t>(count));
+        large_queue->ProduceOrBlock(std::make_unique<uint64_t>(count));
       }
     }));
   }
@@ -198,9 +204,9 @@ TEST(LargeQueue, MultiProducerMultiConsumer) {
   for (size_t thread_num = 0; thread_num < 16; thread_num++) {
     consumer_threads.push_back(std::thread([&large_queue, &sum] {
       for (size_t count = 0; count < ((1 << 20) / 16); count++) {
-        auto result = large_queue->Consume();
+        auto result = large_queue->ConsumeOrBlock();
 
-        std::atomic_fetch_add(&sum, (*result.ValueOrDie()));
+        std::atomic_fetch_add(&sum, (*result));
       }
     }));
   }

@@ -41,26 +41,23 @@ class PtrQueue {
   // Will produce. If the queue is already closed or if the produce action
   // blocks and the queue is closed this method will throw.
   void ProduceOrBlock(std::unique_ptr<T> item) {
-    {
-      std::unique_lock<std::mutex> lock(mu_);
-      if (closed_) {
-        throw std::logic_error("Queue already closed");
-      }
-
-      if (num_items_ == Size) {
-        condition_.wait(lock, [this] {return closed_ || num_items_ < Size;});
-
-        if (closed_) {
-          throw std::logic_error("Queue closed while producing");
-        }
-      }
-
-      queue_[producer_] = std::move(item);
-      producer_ = (producer_ + 1) & kMask;
-
-      num_items_++;
+    std::unique_lock<std::mutex> lock(mu_);
+    if (closed_) {
+      throw std::logic_error("Queue already closed");
     }
 
+    if (num_items_ == Size) {
+      condition_.wait(lock, [this] {return closed_ || num_items_ < Size;});
+
+      if (closed_) {
+        throw std::logic_error("Queue closed while producing");
+      }
+    }
+
+    queue_[producer_] = std::move(item);
+    producer_ = (producer_ + 1) & kMask;
+
+    num_items_++;
     condition_.notify_all();
   }
 
@@ -73,8 +70,12 @@ class PtrQueue {
       std::unique_lock<std::mutex> lock(mu_);
       while (return_ptr.get() == nullptr) {
         if (num_items_ == 0) {
-          condition_.wait(lock, [this] {return closed_ || num_items_ > 0;});
           if (closed_) {
+            return std::move(return_ptr);
+          }
+
+          condition_.wait(lock, [this] {return closed_ || num_items_ > 0;});
+          if (closed_ && num_items_ == 0) {
             return std::move(return_ptr);
           }
         }
@@ -83,11 +84,11 @@ class PtrQueue {
         consumer_ = (consumer_ + 1) & kMask;
         num_items_--;
       }
-    }
 
-    condition_.notify_all();
-    if (return_ptr.get() != nullptr) {
-      return std::move(return_ptr);
+      condition_.notify_all();
+      if (return_ptr.get() != nullptr) {
+        return std::move(return_ptr);
+      }
     }
 
     // If all items were invalid we should try again.
@@ -110,7 +111,6 @@ class PtrQueue {
   // After this call no more items can be produced.
   void Close() {
     closed_ = true;
-
     condition_.notify_all();
   }
 

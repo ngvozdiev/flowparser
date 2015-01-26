@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Werror -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wall -Wextra -O0
+CXXFLAGS=-g -pthread -std=c++11 -pedantic-errors -Werror -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wall -Wextra -O2
 GTEST_DIR = gtest
 GTEST_FLAGS=-isystem $(GTEST_DIR)/include
 LDFLAGS=-g -lpcap -pthread
@@ -20,7 +20,7 @@ gtest_main.o : $(GTEST_SRCS_)
 	$(CXX) $(GTEST_FLAGS) -I$(GTEST_DIR) $(CXXFLAGS) -Wno-missing-field-initializers -c \
             $(GTEST_DIR)/src/gtest_main.cc
 
-common.o: common.cc common.h
+common.o: common.cc common.h ptr_queue.h
 
 packer.o: packer.cc packer.h common.o
 
@@ -31,6 +31,12 @@ parser.o: parser.cc parser.h flows.o
 flowparser.o: flowparser.cc flowparser.h parser.o
 
 # Tests
+ptr_queue_test.o: ptr_queue_test.cc common_test.h
+	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c ptr_queue_test.cc
+
+ptr_queue_test: ptr_queue_test.o gtest_main.o gtest-all.o $(OBJS)
+	$(CXX) $(GTEST_FLAGS) $^ -o $@ $(LDFLAGS)
+
 flows_test.o: flows_test.cc common_test.h flows.o
 	$(CXX) $(GTEST_FLAGS) $(CXXFLAGS) -c flows_test.cc
 

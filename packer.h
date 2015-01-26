@@ -24,6 +24,16 @@ class PackedUintSeq {
     return data_.size() * sizeof(char);
   }
 
+  // Returns a string representing the memory footprint of this sequence.
+  std::string MemString() const {
+    std::string return_string;
+
+    return_string += "num_elements: " + std::to_string(len_) + ", size: "
+        + std::to_string(SizeBytes()) + "bytes, array_len: "
+        + std::to_string(data_.size());
+    return return_string;
+  }
+
   // Appends a value at the end of the sequence. This call can fail if the
   // difference between the last value and this value is too large (larger than
   // kEightByteLimit) or if the new value is smaller than the last appended
@@ -140,8 +150,8 @@ class RLEField {
     T increment_;  // The increment (t).
     size_t len_;  // How many elements there are in the sequence.
 
-    friend class RLEField<T>;
-    friend class RLEFieldIterator<T>;
+    friend class RLEField<T> ;
+    friend class RLEFieldIterator<T> ;
   };
 
  public:
@@ -182,6 +192,21 @@ class RLEField {
     return strides_.size() * sizeof(Stride);
   }
 
+  // Returns a string representing the memory footprint of this sequence.
+  std::string MemString() const {
+    std::string return_string;
+
+    size_t total = 0;
+    for (const auto& stride : strides_) {
+      total += stride.len_;
+    }
+
+    return_string += "strides: " + std::to_string(strides_.size())
+        + ", elements: " + std::to_string(total) + ", bytes: "
+        + std::to_string(SizeBytes());
+    return return_string;
+  }
+
   // Copies out the sequence to a standard vector.
   void Restore(std::vector<T>* vector) const {
     for (const auto& stride : strides_) {
@@ -196,7 +221,7 @@ class RLEField {
   // The entire sequence is stored as a sequence of strides.
   std::vector<Stride> strides_;
 
-  friend class RLEFieldIterator<T>;
+  friend class RLEFieldIterator<T> ;
 
   DISALLOW_COPY_AND_ASSIGN(RLEField<T>);
 };
@@ -223,8 +248,8 @@ class RLEFieldIterator {
       index_in_stride_ = 0;
     }
 
-    *value = curr_stride_->value_ +
-        static_cast<T>(index_in_stride_++) * curr_stride_->increment_;
+    *value = curr_stride_->value_
+        + static_cast<T>(index_in_stride_++) * curr_stride_->increment_;
 
     return true;
   }

@@ -16,6 +16,8 @@
 namespace flowparser {
 
 struct ParserConfig {
+  typedef std::function<void(uint64_t curr_time)> PeriodicCallback;
+
   ParserConfig()
       : soft_mem_limit(1 << 27) {
   }
@@ -26,6 +28,13 @@ struct ParserConfig {
 
   // All new flows will get instantiated with this config.
   FlowConfig new_flow_config;
+};
+
+class PeriodicCallback {
+ private:
+  std::function<void(uint64_t time_now)> callback_;
+  uint64_t period_;
+  uint64_t
 };
 
 struct ParserInfo {
@@ -124,8 +133,7 @@ class Parser {
     flows_table_.erase(flow->key());
     flows_.pop_back();
 
-
-    mem_usage_ -= (sizeof(Flow) + flow->SizeBytes());
+    mem_usage_ -= (flow->SizeBytes());
 
     if (queue_) {
       queue_->ProduceOrBlock(std::move(flow));
@@ -143,7 +151,7 @@ class Parser {
     const auto& it = flows_table_.find(key);
     if (it != flows_table_.end()) {
       // Move the flow to the front of the list
-      //flows_.splice(flows_.begin(), flows_, it->second, std::next(it->second));
+      flows_.splice(flows_.begin(), flows_, it->second);
 
       return it->second->get();
     }

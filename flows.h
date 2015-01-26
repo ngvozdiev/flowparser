@@ -130,7 +130,8 @@ class FlowConfig {
   };
 
   FlowConfig()
-      : fields_to_track_(0x1) {
+      : fields_to_track_(0x1),
+        tcp_estimator_ewma_alpha_(0.5) {
   }
 
   void SetField(HeaderField header_field) {
@@ -145,8 +146,17 @@ class FlowConfig {
     return fields_to_track_;
   }
 
+  void set_tcp_estimator_ewma_alpha(double alpha) {
+    tcp_estimator_ewma_alpha_ = alpha;
+  }
+
+  double tcp_estimator_ewma_alpha() const {
+    return tcp_estimator_ewma_alpha_;
+  }
+
  private:
   uint32_t fields_to_track_;
+  double tcp_estimator_ewma_alpha_;
 
   friend class Flow;
 };
@@ -205,6 +215,38 @@ class TrackedFields {
   friend class FlowIterator;
 };
 
+class Flow;
+
+class TCPRateEstimator {
+ public:
+  TCPRateEstimator(const Flow* flow);
+
+  // Gets the Bps estimate as of a given timestamp.
+  double GetBytesPerSecEstimate(uint64_t curr_timestamp) const;
+
+  // Returns true if this session is suspected to be out of order. The Bps
+  // estimate may be inaccurate in this case.
+  bool out_of_order() const {
+    return out_of_order_;
+  }
+
+ private:
+  // Updates the current Bps estimate. Called every time a new packet is
+  // received by the flow. Missing sequence numbers are interpolated linearly.
+  void UpdateEstimate(uint32_t seq, uint32_t payload_size, uint64_t timestamp);
+
+  const Flow* flow_;
+  uint32_t last_seen_seq_;
+  uint32_t bytes_this_second_;
+  double curr_bytes_per_second_;
+  uint64_t curr_second_start_;
+  bool out_of_order_;
+
+  friend class Flow;
+
+  DISALLOW_COPY_AND_ASSIGN(TCPRateEstimator);
+};
+
 // Information about a flow.
 struct FlowInfo {
   uint64_t pkts_seen = 0;
@@ -222,11 +264,14 @@ class Flow {
       : flow_config_(flow_config),
         first_rx_time_(timestamp),
         key_(key),
-        curr_size_bytes_(0),
+        curr_size_bytes_(sizeof(Flow)),
         state_(FlowState::ACTIVE),
         pkts_seen_(0),
         total_ip_len_seen_(0),
         total_payload_seen_(0) {
+    if (key.protocol() == IPPROTO_TCP) {
+      tcp_rate_estimator_ = std::make_unique<TCPRateEstimator>(this);
+    }
   }
 
   void Deactivate() {
@@ -237,8 +282,20 @@ class Flow {
     return last_rx_time_;
   }
 
+  uint64_t first_rx() const {
+    return first_rx_time_;
+  }
+
   const FlowKey& key() const {
     return key_;
+  }
+
+  const FlowConfig& flow_config() const {
+    return flow_config_;
+  }
+
+  const TCPRateEstimator* EstimatorOrNull() const {
+    return tcp_rate_estimator_.get();
   }
 
   FlowInfo GetInfo() const {
@@ -252,6 +309,27 @@ class Flow {
     info.inmem_size_bytes = curr_size_bytes_;
 
     return info;
+  }
+
+  std::string ToString() const {
+    std::string return_string = "";
+
+    return_string += "key: " + key_.ToString() + ", total_mem: "
+        + std::to_string(curr_size_bytes_) + "bytes,  pkts: "
+        + std::to_string(pkts_seen_) + ", mem breakdown:\n";
+    return_string += "\tTIMESTAMP: " + timestamps_.MemString() + "\n";
+    return_string += "\tPAYLOAD_SIZE: " + payload_size_.MemString() + "\n";
+    return_string += "\tIP_ID: " + ip_id_.MemString() + "\n";
+    return_string += "\tIP_LEN: " + ip_len_.MemString() + "\n";
+    return_string += "\tIP_TTL: " + ip_ttl_.MemString() + "\n";
+    return_string += "\tTCP_FLAGS: " + tcp_flags_.MemString() + "\n";
+    return_string += "\tTCP_SEQ: " + tcp_seq_.MemString() + "\n";
+    return_string += "\tTCP_ACK: " + tcp_ack_.MemString() + "\n";
+    return_string += "\tTCP_WIN: " + tcp_win_.MemString() + "\n";
+    return_string += "\tICMP_TYPE: " + icmp_type_.MemString() + "\n";
+    return_string += "\tICMP_CODE: " + icmp_code_.MemString() + "\n";
+
+    return return_string;
   }
 
   size_t SizeBytes() const {
@@ -274,7 +352,7 @@ class Flow {
  private:
   void IpRx(const pcap::SniffIp& ip_header, uint64_t timestamp);
 
-  // Whether or not to track header fields.
+  // The original flow config
   const FlowConfig& flow_config_;
 
   // Timestamp of the first packet reception.
@@ -333,6 +411,9 @@ class Flow {
 
   // Sum of payload (ip_len - headers) of all packets seen by this flow.
   uint64_t total_payload_seen_;
+
+  // The rate estimator. Only used if the flow is TCP.
+  std::unique_ptr<TCPRateEstimator> tcp_rate_estimator_;
 
   friend class FlowIterator;
 

@@ -70,5 +70,6 @@ class Timer {
   std::chrono::high_resolution_clock::time_point start_point_;
 };
 
+static constexpr uint64_t kMillion = 1000000;
 
 #endif	/* FPARSER_COMMON_H */

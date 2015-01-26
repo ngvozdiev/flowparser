@@ -148,7 +148,7 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
         fparser->HandleUnknown(timestamp, *ip_header);
     }
   } catch (std::exception& ex) {
-    fparser->HandleException(ex);
+    fparser->SendErrorToCallback(ex.what());
   }
 }
 
@@ -159,19 +159,22 @@ void FlowParser::PcapLoop() {
   pollfd pfd;
   try {
     if (config_.offline_) {
-      config_.info_callback_("Will start reading from " + config_.source_);
+      config_.log_callback_(LogSeverity::INFO,
+                            "Will start reading from " + config_.source_);
 
       ret = pcap_loop(pcap_handle_, -1, HandlePkt,
                       reinterpret_cast<u_char*>(this));
       if (ret == 0) {
-        config_.info_callback_("Done reading from " + config_.source_);
+        config_.log_callback_(LogSeverity::INFO,
+                              "Done reading from " + config_.source_);
       } else {
         throw std::logic_error(
             "Error while reading from " + config_.source_ + ", pcap said: "
                 + std::string(pcap_geterr(pcap_handle_)));
       }
     } else {
-      config_.info_callback_("Will start listening on " + config_.source_);
+      config_.log_callback_(LogSeverity::INFO,
+                            "Will start listening on " + config_.source_);
 
       pfd.fd = pcap_fileno(pcap_handle_);
       pfd.events = POLLIN;
@@ -193,7 +196,7 @@ void FlowParser::PcapLoop() {
       }
     }
   } catch (std::exception& ex) {
-    config_.ex_callback_(ex);
+    config_.log_callback_(LogSeverity::ERROR, ex.what());
   }
 }
 

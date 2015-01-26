@@ -14,10 +14,15 @@
 
 namespace flowparser {
 
-static constexpr uint64_t kMillion = 1000000;
+enum LogSeverity {
+  ERROR,
+  INFO
+};
 
 class FlowParserConfig {
  public:
+  typedef std::function<void(LogSeverity level, std::string what)> LogCallback;
+
   FlowParserConfig()
       : offline_(false),
         snapshot_len_(100),
@@ -38,13 +43,8 @@ class FlowParserConfig {
     flow_queue_ = flow_queue;
   }
 
-  void ExceptionCallback(
-      std::function<void(const std::exception& ex)> ex_callback) {
-    ex_callback_ = ex_callback;
-  }
-
-  void InfoCallback(std::function<void(const std::string&)> info_callback) {
-    info_callback_ = info_callback;
+  void SetLogCallback(LogCallback log_callback) {
+    log_callback_ = log_callback;
   }
 
   ParserConfig* MutableParserConfig() {
@@ -70,13 +70,8 @@ class FlowParserConfig {
 
   // A function that will be called when a failure during packet capture occurs.
   // By default will print the error to stdout.
-  std::function<void(const std::exception& ex)> ex_callback_ =
-      [](const std::exception& ex) {std::cout << "ERROR: " << ex.what() << "\n";};
-
-  // A function that will be called if the parser wants to send a text info
-  // message. By default will print to stdout.
-  std::function<void(const std::string&)> info_callback_ =
-      [](const std::string& info) {std::cout << "INFO: " << info << "\n";};
+  LogCallback log_callback_ = [](LogSeverity level, std::string what)
+  { std::cout << std::to_string(level) << " -- " << what << "\n";};
 
   // A callback for flows.
   std::shared_ptr<Parser::FlowQueue> flow_queue_;
@@ -123,10 +118,8 @@ class FlowParser {
     return parser_;
   }
 
-  // Called to handle a bad Status that needs to be forwarded to the client of
-  // FlowParser.
-  void HandleException(const std::exception& ex) const {
-    config_.ex_callback_(ex);
+  void SendErrorToCallback(const std::string& error) const {
+    config_.log_callback_(LogSeverity::ERROR, error);
   }
 
   void RunTrace() {
