@@ -7,6 +7,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <thread>
 
 #include "../flowparser.h"
 #include "../parser.h"
@@ -15,15 +16,17 @@ namespace flowparser {
 namespace example {
 namespace binner {
 
-FlowType BinPackValue::ClassifyFlow(const FlowKey& key, const Flow& flow) {
-  bool small_flow = flow.GetInfo().size_bytes < small_flows_threshold_;
-  bool udp_flow = flow.type() == flowparser::UDP;
-  bool tcp_flow = flow.type() == flowparser::TCP;
-  bool http_flow = (flow.type() == flowparser::TCP)
+FlowType BinPackValue::ClassifyFlow(const Flow& flow) {
+  bool small_flow = flow.GetInfo().total_ip_len_seen < small_flows_threshold_;
+  const FlowKey& key = flow.key();
+
+  bool udp_flow = key.protocol() == IPPROTO_UDP;
+  bool tcp_flow = key.protocol() == IPPROTO_TCP;
+  bool http_flow = tcp_flow
       && (key.src_port() == kHTTPPort || key.dst_port() == kHTTPPort);
-  bool ftp_flow = (flow.type() == flowparser::TCP)
+  bool ftp_flow = tcp_flow
       && (key.src_port() == kFTPPort || key.dst_port() == kFTPPort);
-  bool https_flow = (flow.type() == flowparser::TCP)
+  bool https_flow = tcp_flow
       && (key.src_port() == kHTTPSPort || key.dst_port() == kHTTPSPort);
   bool bt_flow = (key.src_port() >= kBTLowPort && key.src_port() <= kBTHighPort)
       || (key.dst_port() >= kBTLowPort && key.dst_port() <= kBTHighPort);
@@ -72,23 +75,25 @@ void BinPackValue::AddToBin(uint64_t timestamp, uint64_t metric,
   bins_[type][GetBinNum(timestamp)] += metric;
 }
 
-void BinPackValue::BinFlow(const FlowKey& key, const Flow& flow) {
-  FlowType type = ClassifyFlow(key, flow);
+void BinPackValue::BinFlow(const Flow& flow) {
+  FlowType type = ClassifyFlow(flow);
 
-  ExtractMetricAndBin(key, flow, type);
+  ExtractMetricAndBin(flow, type);
 }
 
 void BinPackValue::AddEmptyBins() {
   size_t max_num_bins = 0;
   for (size_t i = 0; i < FlowType_ARRAYSIZE; ++i) {
-    size_t bin_count = bins_[i].size();
-    if (bin_count > max_num_bins) {
-      max_num_bins = bin_count;
+    for (const auto& bin_num_and_value : bins_[i]) {
+      size_t bin_num = bin_num_and_value.first;
+      if (bin_num > max_num_bins) {
+        max_num_bins = bin_num;
+      }
     }
   }
 
   for (size_t i = 0; i < FlowType_ARRAYSIZE; ++i) {
-    for (size_t bin_num = 0; bin_num < max_num_bins; ++bin_num) {
+    for (size_t bin_num = 0; bin_num <= max_num_bins; ++bin_num) {
       bins_[i][bin_num];
     }
   }
@@ -111,7 +116,7 @@ void BinPackValue::ToBinPack(BinPack* bin_pack) {
   }
 }
 
-Status Binner::InitBinPacks() {
+void Binner::InitBinPacks() {
   const uint64_t small_flows_threshold = config_.small_flow_threshold();
 
   for (const auto& bin_pack_config : config_.bin_pack_configs()) {
@@ -137,52 +142,46 @@ Status Binner::InitBinPacks() {
           new EndTimestampBinPack(bin_pack_config.bin_width(),
                                   small_flows_threshold));
     } else {
-      return "Unknown bin pack type";
+      throw std::logic_error("Unknown bin pack type");
     }
 
     bin_packs_.push_back(std::move(new_bin_pack));
   }
-
-  return Status::kStatusOK;
 }
 
-Status Binner::RunTrace() {
+void Binner::RunTrace() {
   FlowParserConfig fp_cfg;
-  flowparser::FlowParser* fp_ptr = nullptr;
 
   const std::string& filename = config_.pcap_filename();
-
   fp_cfg.OfflineTrace(filename);
 
-  fp_cfg.TCPCallback([this, &fp_ptr]
-  (const FlowKey& key, std::unique_ptr<flowparser::TCPFlow> flow) {
-    HandleFlow(key, *flow, *fp_ptr);
+  auto queue_ptr = std::make_shared<Parser::FlowQueue>();
+  fp_cfg.FlowQueue(queue_ptr);
+  FlowConfig* flow_config = fp_cfg.MutableParserConfig()->mutable_flow_config();
+  flow_config->SetField(FlowConfig::HF_IP_ID);
+  flow_config->SetField(FlowConfig::HF_IP_TTL);
+  flow_config->SetField(FlowConfig::HF_IP_LEN);
+  flow_config->SetField(FlowConfig::HF_TCP_SEQ);
+  flow_config->SetField(FlowConfig::HF_TCP_ACK);
+  flow_config->SetField(FlowConfig::HF_TCP_WIN);
+  flow_config->SetField(FlowConfig::HF_TCP_FLAGS);
+
+  FlowParser fp(fp_cfg);
+
+  std::thread th([this, &queue_ptr, &fp] {
+    while (true) {
+      std::unique_ptr<Flow> flow_ptr = queue_ptr->ConsumeOrBlock();
+      if (!flow_ptr) {
+        break;
+      }
+
+      uint64_t first_rx = fp.parser().GetInfoNoLock().first_rx;
+      HandleFlow(*flow_ptr, first_rx);
+    }
   });
 
-  fp_cfg.UDPCallback([this, &fp_ptr]
-  (const FlowKey& key, std::unique_ptr<flowparser::UDPFlow> flow) {
-    HandleFlow(key, *flow, *fp_ptr);
-  });
-
-  fp_cfg.ICMPCallback([this, &fp_ptr]
-  (const FlowKey& key, std::unique_ptr<flowparser::ICMPFlow> flow) {
-    HandleFlow(key, *flow, *fp_ptr);
-  });
-
-  fp_cfg.UnknownCallback([this, &fp_ptr]
-  (const FlowKey& key, std::unique_ptr<flowparser::UnknownFlow> flow) {
-    HandleFlow(key, *flow, *fp_ptr);
-  });
-
-  flowparser::FlowParser fp(fp_cfg);
-  fp_ptr = &fp;
-
-  auto status = fp.RunTrace();
-  if (!status.ok()) {
-    return status;
-  }
-
-  return Status::kStatusOK;
+  fp.RunTrace();
+  th.join();
 }
 
 }  // namespace binner
@@ -213,26 +212,13 @@ int main(int argc, char *argv[]) {
   }
 
   Binner binner(binner_config);
-
-  Status init_bin_packs_status = binner.InitBinPacks();
-  if (!init_bin_packs_status.ok()) {
-    std::cout << "Unable to init bin packs: "
-              << init_bin_packs_status.ToString() << "\n";
-
-    return -1;
-  }
-
-  Status status = binner.RunTrace();
-  if (!status.ok()) {
-    std::cout << "Non-ok status from trace: " << status.ToString() << "\n";
-
-    return -1;
-  }
+  binner.InitBinPacks();
+  binner.RunTrace();
 
   BinnedFlows output_protobuf;
   binner.ToBinnedFlows(&output_protobuf);
 
-  std::ofstream out_stream(binner_config.pcap_filename() + ".binned.proto");
+  std::ofstream out_stream(binner_config.pcap_filename() + ".binned.pb");
   out_stream << output_protobuf.SerializeAsString();
   out_stream.close();
 

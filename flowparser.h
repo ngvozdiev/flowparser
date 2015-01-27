@@ -125,6 +125,7 @@ class FlowParser {
   void RunTrace() {
     PcapOpen();
     PcapLoop();
+    config_.log_callback_(LogSeverity::INFO, "Done parsing PCAP file");
 
     parser_.CollectAllFlows();
   }

@@ -15,26 +15,60 @@
 
 namespace flowparser {
 
-struct ParserConfig {
-  typedef std::function<void(uint64_t curr_time)> PeriodicCallback;
+class Parser;
+
+class ParserConfig {
+ public:
+  typedef std::function<void(const Parser& parser)> PeriodicCallback;
 
   ParserConfig()
-      : soft_mem_limit(1 << 27) {
+      : soft_mem_limit_(1 << 27),
+        callback_period_(0) {
   }
 
+  uint64_t soft_mem_limit() const {
+    return soft_mem_limit_;
+  }
+
+  void set_soft_mem_limit(uint64_t soft_mem_limit) {
+    soft_mem_limit_ = soft_mem_limit;
+  }
+
+  FlowConfig* mutable_flow_config() {
+    return &new_flow_config_;
+  }
+
+  const FlowConfig& flow_config() const {
+    return new_flow_config_;
+  }
+
+  uint64_t callback_period() const {
+    return callback_period_;
+  }
+
+  PeriodicCallback periodic_callback() const {
+    return periodic_callback_;
+  }
+
+  void set_periodic_callback(PeriodicCallback callback,
+                             uint64_t callback_period) {
+    periodic_callback_ = callback;
+    callback_period_ = callback_period;
+  }
+
+ private:
   // Below this threshold no flows are forcibly evicted - they are kept in
   // memory forever.
-  uint64_t soft_mem_limit;
+  uint64_t soft_mem_limit_;
 
   // All new flows will get instantiated with this config.
-  FlowConfig new_flow_config;
-};
+  FlowConfig new_flow_config_;
 
-class PeriodicCallback {
- private:
-  std::function<void(uint64_t time_now)> callback_;
-  uint64_t period_;
-  uint64_t
+  // A callback to be called
+  PeriodicCallback periodic_callback_;
+
+  // How often the callback should be called. 0 switches it off.
+  uint64_t callback_period_;
 };
 
 struct ParserInfo {
@@ -53,11 +87,12 @@ class Parser {
   typedef PtrQueue<Flow, 1 << 10> FlowQueue;
 
   Parser(const ParserConfig& parser_config, std::shared_ptr<FlowQueue> queue)
-      : parser_config(parser_config),
+      : parser_config_(parser_config),
         mem_usage_(0),
         queue_(queue),
         first_rx_(0),
-        last_rx_(std::numeric_limits<uint64_t>::max()) {
+        last_rx_(std::numeric_limits<uint64_t>::max()),
+        next_period_start_(0) {
   }
 
   void TCPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header,
@@ -68,6 +103,7 @@ class Parser {
     flow->TCPIpRx(ip_header, tcp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
     UpdateFirsLastRx(timestamp);
+    CallPeriodicCallbackIfNeeded();
   }
 
   void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
@@ -78,6 +114,7 @@ class Parser {
     flow->UDPIpRx(ip_header, udp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
     UpdateFirsLastRx(timestamp);
+    CallPeriodicCallbackIfNeeded();
   }
 
   void ICMPIpRx(const pcap::SniffIp& ip_header,
@@ -87,6 +124,7 @@ class Parser {
     flow->ICMPIpRx(ip_header, icmp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
     UpdateFirsLastRx(timestamp);
+    CallPeriodicCallbackIfNeeded();
   }
 
   void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
@@ -95,12 +133,17 @@ class Parser {
     flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
     UpdateFirsLastRx(timestamp);
+    CallPeriodicCallbackIfNeeded();
   }
 
   ParserInfo GetInfo() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return GetInfoNoLock();
+  }
+
+  ParserInfo GetInfoNoLock() const {
     ParserInfo info;
 
-    std::lock_guard<std::mutex> lock(mu_);
     info.first_rx = first_rx_;
     info.last_rx = last_rx_;
 
@@ -142,7 +185,7 @@ class Parser {
 
   // Collects one or more flows to make sure they obey
   void CollectIfLimitExceeded() {
-    if (mem_usage_ > parser_config.soft_mem_limit) {
+    if (mem_usage_ > parser_config_.soft_mem_limit()) {
       CollectLast();
     }
   }
@@ -157,7 +200,7 @@ class Parser {
     }
 
     auto flow_ptr = std::make_unique<Flow>(timestamp, key,
-                                           parser_config.new_flow_config);
+                                           parser_config_.flow_config());
     mem_usage_ += sizeof(Flow);
 
     flows_.push_front(std::move(flow_ptr));
@@ -173,8 +216,24 @@ class Parser {
     last_rx_ = timestamp;
   }
 
+  void CallPeriodicCallbackIfNeeded() {
+    if (parser_config_.callback_period() == 0) {
+      return;
+    }
+
+    if (next_period_start_ == 0) {
+      next_period_start_ = last_rx_ + parser_config_.callback_period();
+      return;
+    }
+
+    if (last_rx_ >= next_period_start_) {
+      parser_config_.periodic_callback()(*this);
+      next_period_start_ += parser_config_.callback_period();
+    }
+  }
+
   // Configuration for the parser
-  const ParserConfig parser_config;
+  const ParserConfig parser_config_;
 
   // Memory used in bytes
   size_t mem_usage_;
@@ -188,23 +247,53 @@ class Parser {
   // When a flow is evicted it is added to this queue.
   std::shared_ptr<FlowQueue> queue_;
 
-  // Timestamp of first packet reception
+  // Timestamp of first packet reception.
   uint64_t first_rx_;
 
-  // Timestamp of most recent packet reception
+  // Timestamp of most recent packet reception.
   uint64_t last_rx_;
+
+  // The beginning of the next period the periodic callback should be executed.
+  uint64_t next_period_start_;
 
   // A mutex
   mutable std::mutex mu_;
 
   friend class ParserIterator;
+  friend class ParserIteratorNoLock;
 
   DISALLOW_COPY_AND_ASSIGN(Parser);
 };
 
+class ParserIteratorNoLock {
+ public:
+  ParserIteratorNoLock(const Parser& parser)
+      : it_(parser.flows_table_.begin()),
+        end_it_(parser.flows_table_.end()) {
+  }
+
+  const Flow* Next() {
+    if (it_ == end_it_) {
+      return nullptr;
+    }
+
+    return ((it_)++)->second->get();
+  }
+
+ private:
+
+  // Iterator into the flow table.
+  typename Parser::FlowMap::const_iterator it_;
+
+  // The end of the flow table.
+  typename Parser::FlowMap::const_iterator end_it_;
+
+  DISALLOW_COPY_AND_ASSIGN(ParserIteratorNoLock);
+};
+
 class ParserIterator {
  public:
-  ParserIterator(Parser& parser)
+  ParserIterator(const Parser& parser)
       : lock_guard_(parser.mu_),
         it_(parser.flows_table_.begin()),
         end_it_(parser.flows_table_.end()) {
@@ -223,10 +312,10 @@ class ParserIterator {
   const std::lock_guard<std::mutex> lock_guard_;
 
   // Iterator into the flow table.
-  typename Parser::FlowMap::iterator it_;
+  typename Parser::FlowMap::const_iterator it_;
 
   // The end of the flow table.
-  typename Parser::FlowMap::iterator end_it_;
+  typename Parser::FlowMap::const_iterator end_it_;
 
   DISALLOW_COPY_AND_ASSIGN(ParserIterator);
 };

@@ -43,7 +43,7 @@ class BinPackValue {
   }
 
   // Will classify the flow and bin its packets into 'bins'
-  void BinFlow(const FlowKey& key, const Flow& flow);
+  void BinFlow(const Flow& flow);
 
   // Will serialize the current state of the bins to a BinPack protobuf.
   void ToBinPack(BinPack* bin_pack);
@@ -66,11 +66,10 @@ class BinPackValue {
   }
 
   // Given a FlowKey and a Flow return the type of the flow.
-  FlowType ClassifyFlow(const FlowKey& key, const Flow& flow);
+  FlowType ClassifyFlow(const Flow& flow);
 
   // Implementations should override to perform actual binning.
-  virtual void ExtractMetricAndBin(const FlowKey& key, const Flow& flow,
-                                   FlowType type) = 0;
+  virtual void ExtractMetricAndBin(const Flow& flow, FlowType type) = 0;
 
   uint64_t GetBinNum(uint64_t timestamp) {
     if (first_bin_edge_ > timestamp) {
@@ -115,13 +114,13 @@ class SizeBytesBinPack : public BinPackValue {
   }
 
  protected:
-  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+  void ExtractMetricAndBin(const Flow& flow, FlowType type)
       override {
     FlowIterator it(flow);
-    IPHeader ip_header;
-    while (it.Next(&ip_header)) {
-      uint64_t timestamp = ip_header.timestamp;
-      uint16_t pkt_size = ip_header.length;
+    const TrackedFields* fields;
+    while ((fields = it.NextOrNull()) != nullptr) {
+      uint64_t timestamp = fields->timestamp();
+      uint16_t pkt_size = fields->ip_len();
 
       AddToBin(timestamp, pkt_size, type);
       AddToBin(timestamp, pkt_size, FlowType::TOTAL);
@@ -136,12 +135,12 @@ class SizePktsBinPack : public BinPackValue {
   }
 
  protected:
-  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+  void ExtractMetricAndBin(const Flow& flow, FlowType type)
       override {
     FlowIterator it(flow);
-    IPHeader ip_header;
-    while (it.Next(&ip_header)) {
-      uint64_t timestamp = ip_header.timestamp;
+    const TrackedFields* fields;
+    while ((fields = it.NextOrNull()) != nullptr) {
+      uint64_t timestamp = fields->timestamp();
 
       AddToBin(timestamp, 1, type);
       AddToBin(timestamp, 1, FlowType::TOTAL);
@@ -156,12 +155,9 @@ class NewFlowsBinPack : public BinPackValue {
   }
 
  protected:
-  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+  void ExtractMetricAndBin(const Flow& flow, FlowType type)
       override {
-    FlowIterator it(flow);
-    IPHeader ip_header;
-    it.Next(&ip_header);
-    uint64_t timestamp = ip_header.timestamp;
+    uint64_t timestamp = flow.first_rx();
 
     AddToBin(timestamp, 1, type);
     AddToBin(timestamp, 1, FlowType::TOTAL);
@@ -175,18 +171,12 @@ class EndTimestampBinPack : public BinPackValue {
   }
 
  protected:
-  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+  void ExtractMetricAndBin(const Flow& flow, FlowType type)
       override {
-    FlowIterator it(flow);
-    IPHeader ip_header;
-    uint64_t last_timestamp = 0;
+    uint64_t timestamp = flow.last_rx();
 
-    while (it.Next(&ip_header)) {
-      last_timestamp = ip_header.timestamp;
-    }
-
-    AddToBin(last_timestamp, 1, type);
-    AddToBin(last_timestamp, 1, FlowType::TOTAL);
+    AddToBin(timestamp, 1, type);
+    AddToBin(timestamp, 1, FlowType::TOTAL);
   }
 };
 
@@ -197,7 +187,7 @@ class ActiveFlowsBinPack : public BinPackValue {
   }
 
  protected:
-  void ExtractMetricAndBin(const FlowKey& key, const Flow& flow, FlowType type)
+  void ExtractMetricAndBin(const Flow& flow, FlowType type)
       override {
     // We will assume the flows do not repeat and the keys passed to this
     // function are unique. If we run out of memory and evict a flow which has
@@ -205,9 +195,9 @@ class ActiveFlowsBinPack : public BinPackValue {
     static uint32_t key_id = 0;
 
     FlowIterator it(flow);
-    IPHeader ip_header;
-    while (it.Next(&ip_header)) {
-      uint64_t timestamp = ip_header.timestamp;
+    const TrackedFields* fields;
+    while ((fields = it.NextOrNull()) != nullptr) {
+      uint64_t timestamp = fields->timestamp();
 
       uint64_t bin_num = GetBinNum(timestamp);
 
@@ -236,11 +226,11 @@ class Binner {
 
   // Initializes bin packs from the initial config. Should be called before
   // calling RunTrace.
-  Status InitBinPacks();
+  void InitBinPacks();
 
   // Will construct a new FlowParser, process the file in the config and create
   // and populate a new BinnedFlows instance.
-  Status RunTrace();
+  void RunTrace();
 
   // Serializes this binner and all its bin packs into a BinnedFlows protobuf.
   void ToBinnedFlows(BinnedFlows* binned_flows) {
@@ -252,14 +242,13 @@ class Binner {
 
  private:
 
-  void HandleFlow(const FlowKey& key, const Flow& flow,
-                  const flowparser::FlowParser& flow_parser) {
+  void HandleFlow(const Flow& flow, uint64_t first_rx) {
     for (const auto& bin_pack : bin_packs_) {
       if (bin_pack->NeedToUpdateFirstBinEdge()) {
-        bin_pack->UpdateFirstBinEdge(flow_parser.first_rx());
+        bin_pack->UpdateFirstBinEdge(first_rx);
       }
 
-      bin_pack->BinFlow(key, flow);
+      bin_pack->BinFlow(flow);
     }
   }
 

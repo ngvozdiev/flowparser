@@ -205,7 +205,7 @@ TEST_F(FlowParserFixture, SingleTCPFlow) {
 
   auto queue_ptr = std::make_shared<Parser::FlowQueue>();
   cfg_.FlowQueue(queue_ptr);
-  FlowConfig* flow_config = &(cfg_.MutableParserConfig()->new_flow_config);
+  FlowConfig* flow_config = cfg_.MutableParserConfig()->mutable_flow_config();
   flow_config->SetField(FlowConfig::HF_IP_ID);
   flow_config->SetField(FlowConfig::HF_IP_TTL);
   flow_config->SetField(FlowConfig::HF_IP_LEN);

@@ -18,6 +18,7 @@ for bin_pack in binned_flows.bin_packs:
     
     start = bin_pack.bins_start
     x = [k * bin_pack.bin_width for k in range(bin_pack.num_bins)]
+    print x
 
     #print '\tBP type', bin_pack.type
     #print '\tBP start', bin_pack.bins_start
@@ -36,6 +37,7 @@ for bin_pack in binned_flows.bin_packs:
             continue
 
         label = binner_pb2.FlowType.Name(binned_values.type)
+        print label, len(x), len(binned_values.bins)
         plt.plot(x, binned_values.bins, label=label)
         plt.axes().xaxis.set_major_formatter(FuncFormatter(timestamp_to_string))
         #print '\t\tValues', binned_values.bins

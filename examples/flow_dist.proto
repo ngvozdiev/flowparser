@@ -1,0 +1,16 @@
+package flowparser.example.flow_dist;
+
+message FlowDistConfig {
+  optional string pcap_filename = 3; // required
+  optional uint64 bin_size = 4 [default = 1000000];
+  optional double ewma_alpha = 5 [default = 0.5]; 
+}
+
+message ActiveFlows {
+  optional uint64 timestamp = 1;
+  repeated double flow_rates = 2;
+}
+
+message FlowDist {
+  repeated ActiveFlows datapoints = 1;
+}

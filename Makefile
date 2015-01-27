@@ -73,6 +73,16 @@ examples/binner.o: examples/binner.cc examples/binner.pb.o flowparser.o
 examples/binner: examples/binner.o examples/binner.pb.o $(OBJS)
 	$(CXX) $^ -o $@ $(LDFLAGS) -lprotobuf
 
+examples/flow_dist.pb.o: examples/flow_dist.pb.cc
+
+examples/flow_dist.pb.cc: examples/flow_dist.proto
+	protoc --cpp_out=examples --python_out=examples --proto_path=examples examples/flow_dist.proto
+
+examples/flow_dist.o: examples/flow_dist.cc examples/flow_dist.pb.o flowparser.o
+
+examples/flow_dist: examples/flow_dist.o examples/flow_dist.pb.o $(OBJS)
+	$(CXX) $^ -o $@ $(LDFLAGS) -lprotobuf
+
 clean:
 	$(RM) *.o *.a *.gcov *.gcda *.gcno *_test 
 

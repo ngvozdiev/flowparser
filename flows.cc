@@ -53,14 +53,10 @@ void TCPRateEstimator::UpdateEstimate(uint32_t seq, uint32_t payload_size,
           + alpha * bytes_this_second_;
     }
 
-    std::cout << "Updated bps to " << curr_bytes_per_second_ << "\n";
-
     // For all seconds that we have skipped we decay the value.
     for (size_t i = 0; i < seconds_skipped; ++i) {
       curr_bytes_per_second_ = (1 - alpha) * curr_bytes_per_second_
           + alpha * rate * kMillion;
-
-      std::cout << "Updated bps to " << curr_bytes_per_second_ << "\n";
     }
 
     uint64_t time_into_new_second = time_delta - (seconds_skipped * kMillion)
