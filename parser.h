@@ -20,10 +20,13 @@ class Parser;
 class ParserConfig {
  public:
   typedef std::function<void(const Parser& parser)> PeriodicCallback;
+  typedef std::function<bool(const pcap::SniffIp& ip_hdr)> SampleFilterCallback;
 
   ParserConfig()
       : soft_mem_limit_(1 << 27),
-        callback_period_(0) {
+        callback_period_(0),
+        sample_filter_callback_(
+            [](const pcap::SniffIp& ip_header) {Unused(ip_header); return true;}) {
   }
 
   uint64_t soft_mem_limit() const {
@@ -56,6 +59,10 @@ class ParserConfig {
     callback_period_ = callback_period;
   }
 
+  void set_sample_filter_callback(SampleFilterCallback callback) {
+    sample_filter_callback_ = callback;
+  }
+
  private:
   // Below this threshold no flows are forcibly evicted - they are kept in
   // memory forever.
@@ -64,16 +71,25 @@ class ParserConfig {
   // All new flows will get instantiated with this config.
   FlowConfig new_flow_config_;
 
-  // A callback to be called
+  // A callback to be called.
   PeriodicCallback periodic_callback_;
 
-  // How often the callback should be called. 0 switches it off.
+  // How often the callback should be called. 0s switches it off.
   uint64_t callback_period_;
+
+  // A callback that is called for each incoming packet to determine if it
+  // should be passed to the parser.
+  SampleFilterCallback sample_filter_callback_;
 };
 
 struct ParserInfo {
   uint64_t first_rx = 0;
   uint64_t last_rx = 0;
+  uint64_t total_pkts_seen = 0;
+  uint64_t flow_hits = 0;
+  uint64_t flow_misses = 0;
+  uint64_t mem_usage_bytes = 0;
+  uint64_t num_flows_in_mem = 0;
 };
 
 using std::function;
@@ -92,7 +108,10 @@ class Parser {
         queue_(queue),
         first_rx_(0),
         last_rx_(std::numeric_limits<uint64_t>::max()),
-        next_period_start_(0) {
+        next_period_start_(0),
+        total_pkts_seen_(0),
+        flow_hits_(0),
+        flow_misses_(0) {
   }
 
   void TCPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header,
@@ -146,6 +165,11 @@ class Parser {
 
     info.first_rx = first_rx_;
     info.last_rx = last_rx_;
+    info.total_pkts_seen = total_pkts_seen_;
+    info.flow_hits = flow_hits_;
+    info.flow_misses = flow_misses_;
+    info.mem_usage_bytes = mem_usage_;
+    info.num_flows_in_mem = flows_table_.size();
 
     return info;
   }
@@ -195,12 +219,14 @@ class Parser {
     if (it != flows_table_.end()) {
       // Move the flow to the front of the list
       flows_.splice(flows_.begin(), flows_, it->second);
+      flow_hits_++;
 
       return it->second->get();
     }
 
     auto flow_ptr = std::make_unique<Flow>(timestamp, key,
                                            parser_config_.flow_config());
+    flow_misses_++;
     mem_usage_ += sizeof(Flow);
 
     flows_.push_front(std::move(flow_ptr));
@@ -214,6 +240,7 @@ class Parser {
     }
 
     last_rx_ = timestamp;
+    total_pkts_seen_++;
   }
 
   void CallPeriodicCallbackIfNeeded() {
@@ -255,6 +282,16 @@ class Parser {
 
   // The beginning of the next period the periodic callback should be executed.
   uint64_t next_period_start_;
+
+  // The total number of packets seen by the parser.
+  uint64_t total_pkts_seen_;
+
+  // The number of times a new packet comes in and its flow is in memory.
+  uint64_t flow_hits_;
+
+  // The number of times a new packet comes in an a new flow needs to be
+  // allocated for it.
+  uint64_t flow_misses_;
 
   // A mutex
   mutable std::mutex mu_;

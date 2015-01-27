@@ -19,14 +19,13 @@ x = []
 percentiles = defaultdict(list)
 for datapoint in flow_dist.datapoints:
     x.append(datapoint.timestamp)
-    for i in range(1, 11):
-        p = np.percentile(datapoint.flow_rates, 10 * i)
-        percentiles[10 * i].append(p)
-
-
+    for i in [10,25,50,75,90,100]:
+        p = np.percentile(datapoint.flow_rates, i)
+        percentiles[i].append(p)
 
 for p, y in sorted(percentiles.items()):
-    plt.plot(x, y, label = str(p) + 'th percentile')
+    plt.plot(x, y, 'o', label = str(p) + 'th percentile')
 
+plt.yscale('log')
 plt.legend()
 plt.show()

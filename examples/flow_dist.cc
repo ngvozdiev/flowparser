@@ -20,17 +20,26 @@ void FlowDistRunner::QueryAllFlows(const Parser& parser) {
   uint64_t last_rx = parser.GetInfoNoLock().last_rx;
   active_flows->set_timestamp(last_rx);
 
+  std::cout << "Callback called at " << last_rx << "\n";
+
   ParserIteratorNoLock it(parser);
 
   const Flow* flow_ptr = nullptr;
   while ((flow_ptr = it.Next()) != nullptr) {
+
     if (flow_ptr->key().protocol() != 0x06) {
       continue;
     }
 
-    active_flows->add_flow_rates(
-        flow_ptr->EstimatorOrNull()->GetBytesPerSecEstimate(last_rx));
+    double Bps = flow_ptr->EstimatorOrNull()->GetBytesPerSecEstimate(last_rx);
+    if (Bps < 1) {
+      continue;
+    }
+
+    active_flows->add_flow_rates(Bps);
   }
+
+  std::cout << "Added " << active_flows->flow_rates_size() << " flows \n";
 }
 
 void FlowDistRunner::RunTrace() {

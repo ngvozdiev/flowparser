@@ -26,14 +26,17 @@ void TCPRateEstimator::UpdateEstimate(uint32_t seq, uint32_t payload_size,
   }
 
   const uint64_t bytes_delta = seq - last_seen_seq_ + payload_size;
-
-  const uint64_t time_delta = timestamp - flow_->last_rx();
   const uint64_t curr_second_end = curr_second_start_ + kMillion;
   const double alpha = flow_->flow_config().tcp_estimator_ewma_alpha();
 
   if (timestamp <= curr_second_end) {
     bytes_this_second_ += bytes_delta;
   } else {
+    uint64_t time_delta = timestamp - flow_->last_rx();
+    if (time_delta == 0) {
+      time_delta = 1;
+    }
+
     double rate = static_cast<double>(bytes_delta) / time_delta;
 
     uint32_t seconds_skipped = (timestamp - curr_second_end) / kMillion;
