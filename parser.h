@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <list>
+#include <random>
 
 #include "common.h"
 #include "sniff.h"
@@ -20,13 +21,11 @@ class Parser;
 class ParserConfig {
  public:
   typedef std::function<void(const Parser& parser)> PeriodicCallback;
-  typedef std::function<bool(const pcap::SniffIp& ip_hdr)> SampleFilterCallback;
 
   ParserConfig()
       : soft_mem_limit_(1 << 27),
         callback_period_(0),
-        sample_filter_callback_(
-            [](const pcap::SniffIp& ip_header) {Unused(ip_header); return true;}) {
+        undersample_skip_count_(1) {
   }
 
   uint64_t soft_mem_limit() const {
@@ -49,7 +48,7 @@ class ParserConfig {
     return callback_period_;
   }
 
-  PeriodicCallback periodic_callback() const {
+  inline PeriodicCallback periodic_callback() const {
     return periodic_callback_;
   }
 
@@ -59,8 +58,12 @@ class ParserConfig {
     callback_period_ = callback_period;
   }
 
-  void set_sample_filter_callback(SampleFilterCallback callback) {
-    sample_filter_callback_ = callback;
+  void set_undersample_skip_count(uint32_t undersample_skip_count) {
+    undersample_skip_count_ = undersample_skip_count;
+  }
+
+  inline uint32_t undersample_skip_count() const {
+    return undersample_skip_count_;
   }
 
  private:
@@ -77,9 +80,55 @@ class ParserConfig {
   // How often the callback should be called. 0s switches it off.
   uint64_t callback_period_;
 
-  // A callback that is called for each incoming packet to determine if it
-  // should be passed to the parser.
-  SampleFilterCallback sample_filter_callback_;
+  // One packet will be sampled for every 'undersample_skip_count' number of
+  // packets. Defaults to 1 (no undersamling).
+  uint32_t undersample_skip_count_;
+};
+
+class Undersampler {
+ public:
+  Undersampler(size_t skip_count)
+      : undersample_token_bucket_(0),
+        next_index_(0) {
+    if (skip_count < 2) {
+      throw std::logic_error("Undersample count too low");
+    }
+
+    size_t low_range = skip_count * 0.7;
+    size_t high_range = skip_count * 1.3 + 0.5;
+
+    std::default_random_engine generator;
+    std::uniform_int_distribution<size_t> distribution(low_range, high_range);
+
+    for (size_t i = 0; i < undersample_skip_counts_.size(); ++i) {
+      undersample_skip_counts_[i] = distribution(generator);
+    }
+  }
+
+  bool ShouldSkip() {
+    if (undersample_token_bucket_ == 0) {
+      undersample_token_bucket_ =
+          undersample_skip_counts_[next_index_++ & kMask];
+
+      return false;
+    }
+
+    undersample_token_bucket_--;
+    return true;
+  }
+
+ private:
+  static constexpr size_t kMask = (1 << 10) - 1;
+
+  // A list of values to pick undersample skip counts from. Should have the skip
+  // count value from the config as its mean.
+  std::array<size_t, 1 << 10> undersample_skip_counts_;
+
+  // A token bucket. When it is empty a packet is processed and the bucket is
+  // refilled with the next sample from the skip_count list.
+  uint64_t undersample_token_bucket_;
+
+  uint64_t next_index_;
 };
 
 struct ParserInfo {
@@ -112,11 +161,19 @@ class Parser {
         total_pkts_seen_(0),
         flow_hits_(0),
         flow_misses_(0) {
+    if (parser_config_.undersample_skip_count() != 1) {
+      undersampler_ = std::make_unique<Undersampler>(
+          parser_config_.undersample_skip_count());
+    }
   }
 
   void TCPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header,
                uint64_t timestamp) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (undersampler_ && undersampler_->ShouldSkip()) {
+      return;
+    }
+
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, tcp_header.th_sport,
                                    tcp_header.th_dport });
     flow->TCPIpRx(ip_header, tcp_header, timestamp, &mem_usage_);
@@ -128,6 +185,10 @@ class Parser {
   void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
                uint64_t timestamp) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (undersampler_ && undersampler_->ShouldSkip()) {
+      return;
+    }
+
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, udp_header.uh_sport,
                                    udp_header.uh_dport });
     flow->UDPIpRx(ip_header, udp_header, timestamp, &mem_usage_);
@@ -139,6 +200,10 @@ class Parser {
   void ICMPIpRx(const pcap::SniffIp& ip_header,
                 const pcap::SniffIcmp& icmp_header, uint64_t timestamp) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (undersampler_ && undersampler_->ShouldSkip()) {
+      return;
+    }
+
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
     flow->ICMPIpRx(ip_header, icmp_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
@@ -148,6 +213,10 @@ class Parser {
 
   void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (undersampler_ && undersampler_->ShouldSkip()) {
+      return;
+    }
+
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
     flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
@@ -292,6 +361,9 @@ class Parser {
   // The number of times a new packet comes in an a new flow needs to be
   // allocated for it.
   uint64_t flow_misses_;
+
+  // Only populated if the config requires it.
+  std::unique_ptr<Undersampler> undersampler_;
 
   // A mutex
   mutable std::mutex mu_;

@@ -4,16 +4,18 @@ message FlowDistConfig {
   optional string pcap_filename = 3; // required
   optional uint64 period_musec = 4 [default = 1000000];
   optional double tcp_rate_estimator_ewma_alpha = 5 [default = 0.5]; 
+  optional uint32 undersample_skip_count = 6 [default = 1];
 }
 
 message Datapoint {
   optional uint64 timestamp = 1;
-  repeated double flow_rates = 2;
-  uint64 total_pkts_seen = 3;
-  uint64 total_flow_hits = 4;
-  uint64 total_flow_hits = 5;
-  uint64 total_mem_usage_bytes = 6;
-  uint64 total_flows_in_mem = 7;
+  repeated double rate_percentiles = 2; // 100 values, one for each percentile
+  optional double mean = 3;
+  optional uint64 total_pkts_seen = 4;
+  optional uint64 total_flow_hits = 5;
+  optional uint64 total_flow_misses = 6;
+  optional uint64 total_mem_usage_bytes = 7;
+  optional uint64 total_flows_in_mem = 8;
 }
 
 message FlowDist {
