@@ -88,28 +88,24 @@ class ParserConfig {
 class Undersampler {
  public:
   Undersampler(size_t skip_count)
-      : undersample_token_bucket_(0),
+      : mean_(skip_count),
+        undersample_token_bucket_(0),
         next_index_(0) {
     if (skip_count < 2) {
       throw std::logic_error("Undersample count too low");
     }
 
-    size_t low_range = skip_count * 0.7;
-    size_t high_range = skip_count * 1.3 + 0.5;
-
-    std::default_random_engine generator;
-    std::uniform_int_distribution<size_t> distribution(low_range, high_range);
-
-    for (size_t i = 0; i < undersample_skip_counts_.size(); ++i) {
-      undersample_skip_counts_[i] = distribution(generator);
-    }
+    PopulateSkipCounts();
   }
 
   bool ShouldSkip() {
     if (undersample_token_bucket_ == 0) {
-      undersample_token_bucket_ =
-          undersample_skip_counts_[next_index_++ & kMask];
+      if (next_index_ == (1 << 10)) {
+        next_index_ = 0;
+        PopulateSkipCounts();
+      }
 
+      undersample_token_bucket_ = undersample_skip_counts_[next_index_++];
       return false;
     }
 
@@ -119,6 +115,20 @@ class Undersampler {
 
  private:
   static constexpr size_t kMask = (1 << 10) - 1;
+
+  void PopulateSkipCounts() {
+    size_t low_range = mean_ * 0.7;
+    size_t high_range = mean_ * 1.3 + 0.5;
+
+    std::default_random_engine generator;
+    std::uniform_int_distribution<size_t> distribution(low_range, high_range);
+
+    for (size_t i = 0; i < undersample_skip_counts_.size(); ++i) {
+      undersample_skip_counts_[i] = distribution(generator);
+    }
+  }
+
+  const size_t mean_;
 
   // A list of values to pick undersample skip counts from. Should have the skip
   // count value from the config as its mean.
