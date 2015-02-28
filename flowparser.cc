@@ -126,6 +126,12 @@ static void HandlePkt(u_char* flow_parser, const struct pcap_pkthdr* header,
   const pcap::SniffIp* ip_header = reinterpret_cast<const pcap::SniffIp*>(packet
       + fparser->datalink_offset());
 
+  uint16_t off = ntohs(ip_header->ip_off);
+  if (off && !(off & IP_DF)) {
+    // Don't know how to deal with fragments yet.
+    return;
+  }
+
   try {
     size_t size_ip = ip_header->ip_hl * 4;
     if (size_ip < 20) {

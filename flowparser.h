@@ -47,6 +47,10 @@ class FlowParserConfig {
     log_callback_ = log_callback;
   }
 
+  void SetBPFFilter(const std::string& filter) {
+    bpf_filter_ = filter;
+  }
+
   ParserConfig* MutableParserConfig() {
     return &parser_config_;
   }

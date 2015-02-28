@@ -4,108 +4,144 @@ namespace flowparser {
 
 TCPRateEstimator::TCPRateEstimator(const Flow* flow)
     : flow_(flow),
-      last_seen_seq_(std::numeric_limits<uint32_t>::max()),
-      bytes_this_second_(0),
-      curr_bytes_per_second_(0),
-      curr_second_start_(flow->first_rx()),
-      out_of_order_(false) {
+      period_start_(0),
+      period_start_seq_(0),
+      period_end_(std::numeric_limits<uint64_t>::max()),
+      period_end_seq_(std::numeric_limits<uint64_t>::max()),
+      first_seq_(0),
+      last_seq_(std::numeric_limits<uint32_t>::max()),
+      overflow_count_(0) {
+}
+
+void TCPRateEstimator::UpdateFirstLastSeq(uint32_t seq) {
+  if (first_seq_ == 0) {
+    first_seq_ = seq;
+  }
+
+  if (last_seq_ > seq) {
+    if (last_seq_ - seq < std::numeric_limits<uint16_t>::max()) {
+      // Assume reordered, but no overflow
+      return;
+    }
+
+    overflow_count_++;
+  }
+
+  last_seq_ = seq;
 }
 
 void TCPRateEstimator::UpdateEstimate(uint32_t seq, uint32_t payload_size,
                                       uint64_t timestamp) {
-  if (last_seen_seq_ == std::numeric_limits<uint32_t>::max()) {
-    bytes_this_second_ += payload_size;
-    last_seen_seq_ = seq + payload_size;
+  if (period_start_ == 0) {
+    period_start_ = timestamp;
+    period_start_seq_ = seq;
+
     return;
   }
 
-  if (seq < last_seen_seq_) {
-    // Frame is out of order. We ignore it.
-    out_of_order_ = true;
+  if (period_end_ == std::numeric_limits<uint64_t>::max()) {
+    period_end_ = timestamp;
+    period_end_seq_ = seq + payload_size;
+
+    if (period_start_seq_ > seq) {
+      Reset();
+    }
+
     return;
   }
 
-  const uint64_t bytes_delta = seq - last_seen_seq_ + payload_size;
-  const uint64_t curr_second_end = curr_second_start_ + kMillion;
-  const double alpha = flow_->flow_config().tcp_estimator_ewma_alpha();
+  if (period_end_ == timestamp) {
+    period_end_seq_ = seq + payload_size;
 
-  if (timestamp <= curr_second_end) {
-    bytes_this_second_ += bytes_delta;
-  } else {
-    uint64_t time_delta = timestamp - flow_->last_rx();
-    if (time_delta == 0) {
-      time_delta = 1;
+    if (period_start_seq_ > seq) {
+      Reset();
     }
 
-    double rate = static_cast<double>(bytes_delta) / time_delta;
-
-    uint32_t seconds_skipped = (timestamp - curr_second_end) / kMillion;
-    uint64_t time_remaining_until_end_of_second = curr_second_end
-        - flow_->last_rx();
-
-    // We know that a certain number of bytes (bytes_delta) were transmitted by
-    // the flow over a period starting in the current second and ending in one
-    // of the next seconds.
-    bytes_this_second_ += rate * time_remaining_until_end_of_second;
-
-    // If this is the first second we will not decay the Bps estimate.
-    if (curr_second_start_ == flow_->first_rx()) {
-      curr_bytes_per_second_ = bytes_this_second_;
-    } else {
-      curr_bytes_per_second_ = (1 - alpha) * curr_bytes_per_second_
-          + alpha * bytes_this_second_;
-    }
-
-    // For all seconds that we have skipped we decay the value.
-    for (size_t i = 0; i < seconds_skipped; ++i) {
-      curr_bytes_per_second_ = (1 - alpha) * curr_bytes_per_second_
-          + alpha * rate * kMillion;
-    }
-
-    uint64_t time_into_new_second = time_delta - (seconds_skipped * kMillion)
-        + time_remaining_until_end_of_second;
-
-    bytes_this_second_ = rate * time_into_new_second;
-    curr_second_start_ = curr_second_end + seconds_skipped * kMillion;
+    return;
   }
 
-  last_seen_seq_ = seq + payload_size;
+  if (period_end_ > timestamp) {
+    throw std::logic_error("Non-increasing timestamp");
+  }
+
+  if (period_end_seq_ > seq) {
+    // Flow is reordered, will ignore the packet
+    if (period_end_seq_ - seq > std::numeric_limits<uint16_t>::max()) {
+      // Looks like it is not reordered, but the sequence numbers wrapped,
+      // will reset.
+      Reset();
+      return;
+    }
+
+    return;
+  }
+
+  uint64_t max_width = flow_->flow_config().rate_estimator_max_period_width();
+  if (timestamp > period_start_ + max_width) {
+    period_start_ = period_end_;
+    period_start_seq_ = period_end_seq_;
+  }
+
+  period_end_ = timestamp;
+
+  if (seq + payload_size < seq) {
+    // Overflow, will reset.
+    Reset();
+    return;
+  }
+
+  period_end_seq_ = seq + payload_size;
 }
 
-double TCPRateEstimator::GetBytesPerSecEstimate(uint64_t timestamp) const {
-  if (timestamp < flow_->last_rx()) {
-    throw std::logic_error("Cannot get a Bps estimate in the past");
+bool TCPRateEstimator::GetBytesPerSecEstimate(uint64_t timestamp,
+                                              double* rate_per_sec) const {
+  uint64_t max_width = flow_->flow_config().rate_estimator_max_period_width();
+  uint64_t period_width = period_end_ - period_start_;
+  if (period_width > max_width) {
+    return false;
   }
 
-  const uint64_t curr_second_end = curr_second_start_ + kMillion;
-  const double alpha = flow_->flow_config().tcp_estimator_ewma_alpha();
-
-  double Bps =
-      curr_second_start_ == flow_->first_rx() ?
-          bytes_this_second_ : curr_bytes_per_second_;
-
-  if (timestamp <= curr_second_end) {
-    return Bps;
+  if (period_start_ > timestamp || period_end_ < timestamp) {
+    return false;
   }
 
-  uint32_t seconds_skipped = (timestamp - curr_second_end) / kMillion;
-  for (size_t i = 0; i < seconds_skipped; ++i) {
-    Bps = (1 - alpha) * Bps;
+  double rate = static_cast<double>(period_end_seq_ - period_start_seq_)
+      / (period_end_ - period_start_);
+
+  if (rate * kMillion > 1 << 25) {
+    std::vector<uint32_t> seqs;
+
+    FlowIterator it(*flow_);
+    const TrackedFields* fields;
+    while ((fields = it.NextOrNull()) != nullptr) {
+      seqs.push_back(fields->tcp_seq());
+    }
   }
 
-  return Bps;
+  *rate_per_sec = rate * kMillion;
+  return true;
 }
 
-void Flow::TCPIpRx(const pcap::SniffIp& ip_header,
-                   const pcap::SniffTcp& tcp_header, uint64_t timestamp,
-                   size_t* bytes) {
+uint16_t Flow::TCPIpRx(const pcap::SniffIp& ip_header,
+                       const pcap::SniffTcp& tcp_header, uint64_t timestamp,
+                       size_t* bytes) {
   size_t bytes_before = curr_size_bytes_;
   IpRx(ip_header, timestamp);
 
   uint32_t headers_size = (ip_header.ip_hl + tcp_header.th_off) * 4;
-  uint32_t payload_size = ntohs(ip_header.ip_len) - headers_size;
+  uint16_t ip_len = ntohs(ip_header.ip_len);
+  if (headers_size > ip_len) {
+    throw std::logic_error(
+        "Wrong TCP header size estimate -- ip_len: " + std::to_string(ip_len)
+            + ", headers_size: " + std::to_string(headers_size) + ", key: "
+            + key().ToString());
+  }
+
+  uint16_t payload_size = ip_len - headers_size;
   total_payload_seen_ += payload_size;
   uint32_t seq = ntohl(tcp_header.th_seq);
+
+  tcp_flags_or_ |= tcp_header.th_flags;
 
   if (flow_config_.fields_to_track_ & FlowConfig::HF_PAYLOAD_SIZE) {
     payload_size_.Append(payload_size, &curr_size_bytes_);
@@ -127,19 +163,34 @@ void Flow::TCPIpRx(const pcap::SniffIp& ip_header,
     tcp_win_.Append(ntohs(tcp_header.th_win), &curr_size_bytes_);
   }
 
-  tcp_rate_estimator_->UpdateEstimate(seq, payload_size, timestamp);
+  if ((tcp_header.th_flags & TH_RST) || (tcp_header.th_flags & TH_SYN)) {
+    tcp_rate_estimator_->Reset();
+  } else {
+    tcp_rate_estimator_->UpdateEstimate(seq, payload_size, timestamp);
+  }
+
   last_rx_time_ = timestamp;
   *bytes += (curr_size_bytes_ - bytes_before);
+
+  return payload_size;
 }
 
-void Flow::UDPIpRx(const pcap::SniffIp& ip_header,
-                   const pcap::SniffUdp& udp_header, uint64_t timestamp,
-                   size_t* bytes) {
+uint16_t Flow::UDPIpRx(const pcap::SniffIp& ip_header,
+                       const pcap::SniffUdp& udp_header, uint64_t timestamp,
+                       size_t* bytes) {
   Unused(udp_header);
   size_t bytes_before = curr_size_bytes_;
 
-  uint32_t headers_size = ip_header.ip_hl * 4 - pcap::kSizeUDP;
-  uint32_t payload_size = ntohs(ip_header.ip_len) - headers_size;
+  uint32_t headers_size = ip_header.ip_hl * 4 + pcap::kSizeUDP;
+  uint16_t ip_len = ntohs(ip_header.ip_len);
+  if (headers_size > ip_len) {
+    throw std::logic_error(
+        "Wrong UDP header size estimate -- ip_len: " + std::to_string(ip_len)
+            + ", headers_size: " + std::to_string(headers_size) + ", key: "
+            + key().ToString());
+  }
+
+  uint16_t payload_size = ip_len - headers_size;
   total_payload_seen_ += payload_size;
   if (flow_config_.fields_to_track_ & FlowConfig::HF_PAYLOAD_SIZE) {
     payload_size_.Append(payload_size, &curr_size_bytes_);
@@ -148,16 +199,26 @@ void Flow::UDPIpRx(const pcap::SniffIp& ip_header,
   IpRx(ip_header, timestamp);
   last_rx_time_ = timestamp;
   *bytes += (curr_size_bytes_ - bytes_before);
+
+  return payload_size;
 }
 
-void Flow::ICMPIpRx(const pcap::SniffIp& ip_header,
-                    const pcap::SniffIcmp& icmp_header, uint64_t timestamp,
-                    size_t* bytes) {
+uint16_t Flow::ICMPIpRx(const pcap::SniffIp& ip_header,
+                        const pcap::SniffIcmp& icmp_header, uint64_t timestamp,
+                        size_t* bytes) {
   size_t bytes_before = curr_size_bytes_;
   IpRx(ip_header, timestamp);
 
-  uint32_t headers_size = ip_header.ip_hl * 4 - pcap::kSizeICMP;
-  uint32_t payload_size = ntohs(ip_header.ip_len) - headers_size;
+  uint32_t headers_size = ip_header.ip_hl * 4 + pcap::kSizeICMP;
+  uint16_t ip_len = ntohs(ip_header.ip_len);
+  if (headers_size > ip_len) {
+    throw std::logic_error(
+        "Wrong ICMP header size estimate -- ip_len: " + std::to_string(ip_len)
+            + ", headers_size: " + std::to_string(headers_size) + ", key: "
+            + key().ToString());
+  }
+
+  uint16_t payload_size = ip_len - headers_size;
   total_payload_seen_ += payload_size;
   if (flow_config_.fields_to_track_ & FlowConfig::HF_PAYLOAD_SIZE) {
     payload_size_.Append(payload_size, &curr_size_bytes_);
@@ -173,15 +234,17 @@ void Flow::ICMPIpRx(const pcap::SniffIp& ip_header,
 
   last_rx_time_ = timestamp;
   *bytes += (curr_size_bytes_ - bytes_before);
+
+  return payload_size;
 }
 
-void Flow::UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp,
-                       size_t* bytes) {
+uint16_t Flow::UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp,
+                           size_t* bytes) {
   size_t bytes_before = curr_size_bytes_;
   IpRx(ip_header, timestamp);
 
   // This will be off, but we don't know what the protocol is.
-  uint32_t payload_size = ntohs(ip_header.ip_len) - ip_header.ip_hl * 4;
+  uint16_t payload_size = ntohs(ip_header.ip_len) - ip_header.ip_hl * 4;
   total_payload_seen_ += payload_size;
   if (flow_config_.fields_to_track_ & FlowConfig::HF_PAYLOAD_SIZE) {
     payload_size_.Append(payload_size, &curr_size_bytes_);
@@ -189,6 +252,8 @@ void Flow::UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp,
 
   last_rx_time_ = timestamp;
   *bytes += (curr_size_bytes_ - bytes_before);
+
+  return payload_size;
 }
 
 void Flow::IpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {

@@ -23,8 +23,7 @@ class ParserConfig {
   typedef std::function<void(const Parser& parser)> PeriodicCallback;
 
   ParserConfig()
-      : soft_mem_limit_(1 << 27),
-        callback_period_(0),
+      : soft_mem_limit_(1 << 30),
         undersample_skip_count_(1) {
   }
 
@@ -44,18 +43,12 @@ class ParserConfig {
     return new_flow_config_;
   }
 
-  uint64_t callback_period() const {
-    return callback_period_;
+  const std::vector<PeriodicCallback>& periodic_callbacks() const {
+    return periodic_callbacks_;
   }
 
-  inline PeriodicCallback periodic_callback() const {
-    return periodic_callback_;
-  }
-
-  void set_periodic_callback(PeriodicCallback callback,
-                             uint64_t callback_period) {
-    periodic_callback_ = callback;
-    callback_period_ = callback_period;
+  void add_periodic_callback(PeriodicCallback callback) {
+    periodic_callbacks_.push_back(callback);
   }
 
   void set_undersample_skip_count(uint32_t undersample_skip_count) {
@@ -75,10 +68,7 @@ class ParserConfig {
   FlowConfig new_flow_config_;
 
   // A callback to be called.
-  PeriodicCallback periodic_callback_;
-
-  // How often the callback should be called. 0s switches it off.
-  uint64_t callback_period_;
+  std::vector<PeriodicCallback> periodic_callbacks_;
 
   // One packet will be sampled for every 'undersample_skip_count' number of
   // packets. Defaults to 1 (no undersamling).
@@ -145,10 +135,35 @@ struct ParserInfo {
   uint64_t first_rx = 0;
   uint64_t last_rx = 0;
   uint64_t total_pkts_seen = 0;
+  uint64_t total_tcp_syn_or_fin_pkts_seen = 0;
   uint64_t flow_hits = 0;
   uint64_t flow_misses = 0;
   uint64_t mem_usage_bytes = 0;
   uint64_t num_flows_in_mem = 0;
+  uint64_t tcp_flows_in_mem = 0;
+  uint64_t udp_flows_in_mem = 0;
+  uint64_t icmp_flows_in_mem = 0;
+  double pkts_seen_per_sec = 0.0;
+  double ip_len_seen_per_sec = 0.0;
+  double payload_seen_per_sec = 0.0;
+  double tcp_payload_seen_per_sec = 0.0;
+};
+
+struct RunningAverage {
+  void EndSecond() {
+    if (first_second) {
+      average = total_this_second;
+    } else {
+      average = 0.1 * average + 0.9 * total_this_second;
+    }
+
+    total_this_second = 0;
+    first_second = false;
+  }
+
+  bool first_second = true;
+  double average = 0;
+  uint64_t total_this_second = 0;
 };
 
 using std::function;
@@ -167,8 +182,9 @@ class Parser {
         queue_(queue),
         first_rx_(0),
         last_rx_(std::numeric_limits<uint64_t>::max()),
-        next_period_start_(0),
+        next_second_start_(0),
         total_pkts_seen_(0),
+        total_tcp_syn_or_fin_pkts_seen_(0),
         flow_hits_(0),
         flow_misses_(0) {
     if (parser_config_.undersample_skip_count() != 1) {
@@ -186,10 +202,19 @@ class Parser {
 
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, tcp_header.th_sport,
                                    tcp_header.th_dport });
-    flow->TCPIpRx(ip_header, tcp_header, timestamp, &mem_usage_);
+    uint16_t payload = flow->TCPIpRx(ip_header, tcp_header, timestamp,
+                                     &mem_usage_);
+
+    if (tcp_header.th_flags & TH_SYN) {
+      total_tcp_syn_or_fin_pkts_seen_++;
+    } else if (!(flow->tcp_flags_or() & TH_SYN)
+        && (tcp_header.th_flags & TH_FIN)) {
+      total_tcp_syn_or_fin_pkts_seen_++;
+    }
+
     CollectIfLimitExceeded();
-    UpdateFirsLastRx(timestamp);
-    CallPeriodicCallbackIfNeeded();
+    UpdateStats(timestamp, ntohs(ip_header.ip_len), payload, true);
+    CallPeriodicCallbacks();
   }
 
   void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
@@ -201,10 +226,11 @@ class Parser {
 
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, udp_header.uh_sport,
                                    udp_header.uh_dport });
-    flow->UDPIpRx(ip_header, udp_header, timestamp, &mem_usage_);
+    uint16_t payload = flow->UDPIpRx(ip_header, udp_header, timestamp,
+                                     &mem_usage_);
     CollectIfLimitExceeded();
-    UpdateFirsLastRx(timestamp);
-    CallPeriodicCallbackIfNeeded();
+    UpdateStats(timestamp, ntohs(ip_header.ip_len), payload, false);
+    CallPeriodicCallbacks();
   }
 
   void ICMPIpRx(const pcap::SniffIp& ip_header,
@@ -215,10 +241,11 @@ class Parser {
     }
 
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
-    flow->ICMPIpRx(ip_header, icmp_header, timestamp, &mem_usage_);
+    uint16_t payload = flow->ICMPIpRx(ip_header, icmp_header, timestamp,
+                                      &mem_usage_);
     CollectIfLimitExceeded();
-    UpdateFirsLastRx(timestamp);
-    CallPeriodicCallbackIfNeeded();
+    UpdateStats(timestamp, ntohs(ip_header.ip_len), payload, false);
+    CallPeriodicCallbacks();
   }
 
   void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp) {
@@ -228,15 +255,19 @@ class Parser {
     }
 
     Flow* flow = FindOrNewFlow(timestamp, { ip_header, 0, 0 });
-    flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
+    uint16_t payload = flow->UnknownIpRx(ip_header, timestamp, &mem_usage_);
     CollectIfLimitExceeded();
-    UpdateFirsLastRx(timestamp);
-    CallPeriodicCallbackIfNeeded();
+    UpdateStats(timestamp, ntohs(ip_header.ip_len), payload, false);
+    CallPeriodicCallbacks();
   }
 
-  ParserInfo GetInfo() const {
-    std::lock_guard<std::mutex> lock(mu_);
-    return GetInfoNoLock();
+  uint64_t last_rx() const {
+    return last_rx_;
+  }
+
+  std::unique_lock<std::mutex> GetLock() const {
+    std::unique_lock<std::mutex> lock(mu_);
+    return std::move(lock);
   }
 
   ParserInfo GetInfoNoLock() const {
@@ -245,12 +276,42 @@ class Parser {
     info.first_rx = first_rx_;
     info.last_rx = last_rx_;
     info.total_pkts_seen = total_pkts_seen_;
+    info.total_tcp_syn_or_fin_pkts_seen = total_tcp_syn_or_fin_pkts_seen_;
     info.flow_hits = flow_hits_;
     info.flow_misses = flow_misses_;
     info.mem_usage_bytes = mem_usage_;
     info.num_flows_in_mem = flows_table_.size();
+    info.tcp_flows_in_mem = CountFlows(IPPROTO_TCP);
+    info.udp_flows_in_mem = CountFlows(IPPROTO_UDP);
+    info.icmp_flows_in_mem = CountFlows(IPPROTO_ICMP);
+
+    info.ip_len_seen_per_sec = ip_len_seen_running_avg_.average;
+    info.payload_seen_per_sec = payload_seen_running_avg_.average;
+    info.pkts_seen_per_sec = pkts_seen_running_avg_.average;
+    info.tcp_payload_seen_per_sec = tcp_payload_seen_running_avg_.average;
 
     return info;
+  }
+
+  uint64_t GetOriginalNumFlowsEstimate(uint32_t sample_skip_count) const {
+    if (sample_skip_count < 2) {
+      return flows_table_.size();
+    }
+
+    size_t syn_flows = 0;
+
+    for (const auto& flow_ptr : flows_) {
+      uint8_t flags = flow_ptr->tcp_flags_or();
+      uint64_t pkts_seen = flow_ptr->pkts_seen();
+
+      if ((flags & TH_SYN) && pkts_seen == 1) {
+        syn_flows++;
+      }
+    }
+
+    size_t other_flows = flows_.size() - syn_flows;
+
+    return syn_flows * sample_skip_count + other_flows;
   }
 
   // Collects all flows
@@ -268,6 +329,17 @@ class Parser {
  private:
   typedef std::list<std::unique_ptr<Flow>> FlowList;
   typedef std::unordered_map<FlowKey, typename FlowList::iterator, KeyHasher> FlowMap;
+
+  uint64_t CountFlows(uint8_t ip_proto) const {
+    uint64_t count = 0;
+    for (const auto& flow_ptr : flows_) {
+      if (flow_ptr->key().protocol() == ip_proto) {
+        ++count;
+      }
+    }
+
+    return count;
+  }
 
   // Collects the least recently accessed flow.
   void CollectLast() {
@@ -313,28 +385,44 @@ class Parser {
     return flows_.begin()->get();
   }
 
-  void UpdateFirsLastRx(uint64_t timestamp) {
+  void UpdateStats(uint64_t timestamp, uint16_t ip_len, uint16_t payload,
+                   bool tcp) {
     if (first_rx_ == 0) {
       first_rx_ = timestamp;
     }
 
     last_rx_ = timestamp;
     total_pkts_seen_++;
+
+    pkts_seen_running_avg_.total_this_second++;
+    ip_len_seen_running_avg_.total_this_second += ip_len;
+    payload_seen_running_avg_.total_this_second += payload;
+
+    if (tcp) {
+      tcp_payload_seen_running_avg_.total_this_second += payload;
+    }
   }
 
-  void CallPeriodicCallbackIfNeeded() {
-    if (parser_config_.callback_period() == 0) {
+  void UpdateAverages() {
+    ip_len_seen_running_avg_.EndSecond();
+    payload_seen_running_avg_.EndSecond();
+    tcp_payload_seen_running_avg_.EndSecond();
+    pkts_seen_running_avg_.EndSecond();
+  }
+
+  void CallPeriodicCallbacks() {
+    if (next_second_start_ == 0) {
+      next_second_start_ = last_rx_ + kMillion;
       return;
     }
 
-    if (next_period_start_ == 0) {
-      next_period_start_ = last_rx_ + parser_config_.callback_period();
-      return;
-    }
+    if (last_rx_ >= next_second_start_) {
+      UpdateAverages();
+      for (const auto& callback : parser_config_.periodic_callbacks()) {
+        callback(*this);
+      }
 
-    if (last_rx_ >= next_period_start_) {
-      parser_config_.periodic_callback()(*this);
-      next_period_start_ += parser_config_.callback_period();
+      next_second_start_ += kMillion;
     }
   }
 
@@ -360,10 +448,25 @@ class Parser {
   uint64_t last_rx_;
 
   // The beginning of the next period the periodic callback should be executed.
-  uint64_t next_period_start_;
+  uint64_t next_second_start_;
+
+  // Running average of the ip len seen.
+  RunningAverage ip_len_seen_running_avg_;
+
+  // Running average of the payloads (ip_len - headers) seen.
+  RunningAverage payload_seen_running_avg_;
+
+  // Running average of the TCP payloads seen.
+  RunningAverage tcp_payload_seen_running_avg_;
+
+  // Running average of the packets seen.
+  RunningAverage pkts_seen_running_avg_;
 
   // The total number of packets seen by the parser.
   uint64_t total_pkts_seen_;
+
+  // Total number of packets seen that have the SYN bit set.
+  uint64_t total_tcp_syn_or_fin_pkts_seen_;
 
   // The number of times a new packet comes in and its flow is in memory.
   uint64_t flow_hits_;
@@ -384,9 +487,9 @@ class Parser {
   DISALLOW_COPY_AND_ASSIGN(Parser);
 };
 
-class ParserIteratorNoLock {
+class ParserIterator {
  public:
-  ParserIteratorNoLock(const Parser& parser)
+  ParserIterator(const Parser& parser)
       : it_(parser.flows_table_.begin()),
         end_it_(parser.flows_table_.end()) {
   }
@@ -400,35 +503,6 @@ class ParserIteratorNoLock {
   }
 
  private:
-
-  // Iterator into the flow table.
-  typename Parser::FlowMap::const_iterator it_;
-
-  // The end of the flow table.
-  typename Parser::FlowMap::const_iterator end_it_;
-
-  DISALLOW_COPY_AND_ASSIGN(ParserIteratorNoLock);
-};
-
-class ParserIterator {
- public:
-  ParserIterator(const Parser& parser)
-      : lock_guard_(parser.mu_),
-        it_(parser.flows_table_.begin()),
-        end_it_(parser.flows_table_.end()) {
-  }
-
-  const Flow* Next() {
-    if (it_ == end_it_) {
-      return nullptr;
-    }
-
-    return ((it_)++)->second->get();
-  }
-
- private:
-  // A lock to keep the mutex until the iterator object goes out of scope.
-  const std::lock_guard<std::mutex> lock_guard_;
 
   // Iterator into the flow table.
   typename Parser::FlowMap::const_iterator it_;

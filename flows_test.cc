@@ -185,6 +185,27 @@ TEST_F(FlowFixture, RateEstimatorAverage) {
   ASSERT_DOUBLE_EQ(2600, estimator->GetBytesPerSecEstimate(flow.last_rx()));
 }
 
+TEST_F(FlowFixture, RateEstimatorAverageOverflow) {
+  flow_cfg_.set_tcp_estimator_ewma_alpha(0.8);
+  Flow flow(kInitTimestamp, *key_, flow_cfg_);
+  const TCPRateEstimator* estimator = flow.EstimatorOrNull();
+
+  // Every 1300 bytes every 0.5 sec, should average to 2600 Bps
+  uint32_t seq_base = std::numeric_limits<uint32_t>::max() - 10 * 1300;
+  for (size_t i = 0; i < 100; ++i) {
+    UpdateTcpIp(kInitTimestamp + i * (kMillion / 2), 1300, seq_base + i * 1300,
+                &flow);
+
+    // Immediately after the first update the rate should be 1300
+    if (i == 0) {
+      ASSERT_DOUBLE_EQ(1300, estimator->GetBytesPerSecEstimate(flow.last_rx()));
+    }
+  }
+
+  ASSERT_FALSE(estimator->out_of_order());
+  ASSERT_DOUBLE_EQ(2600, estimator->GetBytesPerSecEstimate(flow.last_rx()));
+}
+
 TEST_F(FlowFixture, RateEstimatorAverageTwo) {
   flow_cfg_.set_tcp_estimator_ewma_alpha(0.8);
   Flow flow(kInitTimestamp, *key_, flow_cfg_);
@@ -208,6 +229,22 @@ TEST_F(FlowFixture, RateEstimatorAverageThree) {
   // packets except the last one.
   UpdateTcpIp(kInitTimestamp, 1300, 0, &flow);
   UpdateTcpIp(kInitTimestamp + 99 * kMillion, 1300, 99 * 1300, &flow);
+
+  ASSERT_FALSE(estimator->out_of_order());
+  ASSERT_DOUBLE_EQ(1300, estimator->GetBytesPerSecEstimate(flow.last_rx()));
+}
+
+TEST_F(FlowFixture, RateEstimatorAverageThreeOverflow) {
+  flow_cfg_.set_tcp_estimator_ewma_alpha(0.8);
+  Flow flow(kInitTimestamp, *key_, flow_cfg_);
+  const TCPRateEstimator* estimator = flow.EstimatorOrNull();
+
+  // Every 1300 bytes every sec, should average to 1300 Bps, but we skip all
+  // packets except the last one.
+  uint32_t seq_base = std::numeric_limits<uint32_t>::max() - 10 * 1300;
+  UpdateTcpIp(kInitTimestamp, 1300, seq_base, &flow);
+  UpdateTcpIp(kInitTimestamp + 99 * kMillion, 1300, seq_base + 99 * 1300,
+              &flow);
 
   ASSERT_FALSE(estimator->out_of_order());
   ASSERT_DOUBLE_EQ(1300, estimator->GetBytesPerSecEstimate(flow.last_rx()));

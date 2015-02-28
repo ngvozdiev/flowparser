@@ -1,3 +1,6 @@
+#include <iostream>
+#include <fstream>
+
 #include "flow_dist.pb.h"
 
 namespace flowparser {
@@ -26,6 +29,8 @@ class FlowDistRunner {
 
  private:
   const FlowDistConfig& config_;
+
+  std::ofstream flow_duration_file_;
 
   FlowDist dist_;
 };

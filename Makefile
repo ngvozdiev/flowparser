@@ -81,7 +81,7 @@ examples/flow_dist.pb.cc: examples/flow_dist.proto
 examples/flow_dist.o: examples/flow_dist.cc examples/flow_dist.pb.o flowparser.o
 
 examples/flow_dist: examples/flow_dist.o examples/flow_dist.pb.o $(OBJS)
-	$(CXX) $^ -o $@ $(LDFLAGS) -lprotobuf
+	$(CXX) $^ -o $@ $(LDFLAGS) -lprotobuf 
 
 clean:
 	$(RM) *.o *.a *.gcov *.gcda *.gcno *_test 

@@ -48,7 +48,8 @@ class FlowKey {
   std::string ToString() const {
     return "(src='" + IPToString(src_) + "', dst='" + IPToString(dst_)
         + "', src_port=" + std::to_string(src_port()) + ", dst_port="
-        + std::to_string(dst_port()) + ")";
+        + std::to_string(dst_port()) + ", proto=" + std::to_string(ip_proto_)
+        + ")";
   }
 
   // The source IP address of the flow (in host byte order)
@@ -131,7 +132,7 @@ class FlowConfig {
 
   FlowConfig()
       : fields_to_track_(0x1),
-        tcp_estimator_ewma_alpha_(0.5) {
+        rate_estimator_max_period_width_(2500000) {
   }
 
   void SetField(HeaderField header_field) {
@@ -146,17 +147,17 @@ class FlowConfig {
     return fields_to_track_;
   }
 
-  void set_tcp_estimator_ewma_alpha(double alpha) {
-    tcp_estimator_ewma_alpha_ = alpha;
+  void set_rate_estimator_max_period_width(uint64_t width) {
+    rate_estimator_max_period_width_ = width;
   }
 
-  double tcp_estimator_ewma_alpha() const {
-    return tcp_estimator_ewma_alpha_;
+  uint64_t rate_estimator_max_period_width() const {
+    return rate_estimator_max_period_width_;
   }
 
  private:
   uint32_t fields_to_track_;
-  double tcp_estimator_ewma_alpha_;
+  uint64_t rate_estimator_max_period_width_;
 
   friend class Flow;
 };
@@ -221,26 +222,40 @@ class TCPRateEstimator {
  public:
   TCPRateEstimator(const Flow* flow);
 
-  // Gets the Bps estimate as of a given timestamp.
-  double GetBytesPerSecEstimate(uint64_t curr_timestamp) const;
+  // Gets the Bps estimate as of a given timestamp. If there isn't enough
+  // information to obtain an estimate, false will be returned.
+  bool GetBytesPerSecEstimate(uint64_t timestamp, double* rate) const;
 
-  // Returns true if this session is suspected to be out of order. The Bps
-  // estimate may be inaccurate in this case.
-  bool out_of_order() const {
-    return out_of_order_;
+  uint64_t GetVolumeEstimate() const {
+    return last_seq_
+        + static_cast<uint64_t>(overflow_count_
+            * std::numeric_limits<uint32_t>::max()) - first_seq_;
+  }
+
+  void Reset() {
+    period_start_ = 0;
+    period_end_ = std::numeric_limits<uint64_t>::max();
+    period_start_seq_ = 0;
+    period_end_seq_ = std::numeric_limits<uint64_t>::max();
   }
 
  private:
-  // Updates the current Bps estimate. Called every time a new packet is
-  // received by the flow. Missing sequence numbers are interpolated linearly.
+  void UpdateFirstLastSeq(uint32_t seq);
+
+  // Updates the period boundaries. Called every time a new packet is
+  // received by the flow.
   void UpdateEstimate(uint32_t seq, uint32_t payload_size, uint64_t timestamp);
 
   const Flow* flow_;
-  uint32_t last_seen_seq_;
-  uint32_t bytes_this_second_;
-  double curr_bytes_per_second_;
-  uint64_t curr_second_start_;
-  bool out_of_order_;
+
+  uint64_t period_start_;
+  uint64_t period_start_seq_;
+  uint64_t period_end_;
+  uint64_t period_end_seq_;
+
+  uint32_t first_seq_;
+  uint32_t last_seq_;
+  uint32_t overflow_count_;
 
   friend class Flow;
 
@@ -286,6 +301,10 @@ class Flow {
     return first_rx_time_;
   }
 
+  uint64_t pkts_seen() const {
+    return pkts_seen_;
+  }
+
   const FlowKey& key() const {
     return key_;
   }
@@ -294,7 +313,11 @@ class Flow {
     return flow_config_;
   }
 
-  const TCPRateEstimator* EstimatorOrNull() const {
+  uint8_t tcp_flags_or() const {
+    return tcp_flags_or_;
+  }
+
+  const TCPRateEstimator* TCPRateEstimatorOrNull() const {
     return tcp_rate_estimator_.get();
   }
 
@@ -336,18 +359,28 @@ class Flow {
     return curr_size_bytes_;
   }
 
-  void TCPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffTcp& tcp_header,
-               uint64_t timestamp, size_t* bytes);
-
-  void UDPIpRx(const pcap::SniffIp& ip_header, const pcap::SniffUdp& udp_header,
-               uint64_t timestamp, size_t* bytes);
-
-  void ICMPIpRx(const pcap::SniffIp& ip_header,
-                const pcap::SniffIcmp& icmp_header, uint64_t timestamp,
-                size_t* bytes);
-
-  void UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp,
+  // Updates the flow with a new TCP packet. Should only be called if the
+  // flow is TCP. Returns the payload of the packet.
+  uint16_t TCPIpRx(const pcap::SniffIp& ip_header,
+                   const pcap::SniffTcp& tcp_header, uint64_t timestamp,
                    size_t* bytes);
+
+  // Updates the flow with a new UDP packet. Should only be called if the
+  // flow is UDP. Returns the payload of the packet.
+  uint16_t UDPIpRx(const pcap::SniffIp& ip_header,
+                   const pcap::SniffUdp& udp_header, uint64_t timestamp,
+                   size_t* bytes);
+
+  // Updates the flow with a new ICMP packet. Should only be called if the
+  // flow is ICMP. Returns the payload of the packet.
+  uint16_t ICMPIpRx(const pcap::SniffIp& ip_header,
+                    const pcap::SniffIcmp& icmp_header, uint64_t timestamp,
+                    size_t* bytes);
+
+  // Updates the flow with a new IP packet from an unknown transport protocol.
+  // Returns the payload of the packet.
+  uint16_t UnknownIpRx(const pcap::SniffIp& ip_header, uint64_t timestamp,
+                       size_t* bytes);
 
  private:
   void IpRx(const pcap::SniffIp& ip_header, uint64_t timestamp);
@@ -414,6 +447,10 @@ class Flow {
 
   // The rate estimator. Only used if the flow is TCP.
   std::unique_ptr<TCPRateEstimator> tcp_rate_estimator_;
+
+  // The value of the flag fields of all packets OR-ed together. 0 if this flow
+  // is not TCP.
+  uint8_t tcp_flags_or_;
 
   friend class FlowIterator;
 
