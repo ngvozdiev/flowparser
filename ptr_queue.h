@@ -38,6 +38,10 @@ class PtrQueue {
     return num_items_;
   }
 
+  bool empty() {
+    return size() == 0;
+  }
+
   // Will produce. If the queue is already closed or if the produce action
   // blocks and the queue is closed this method will throw.
   void ProduceOrBlock(std::unique_ptr<T> item) {

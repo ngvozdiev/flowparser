@@ -9,13 +9,6 @@
 
 namespace flowparser {
 
-// A flow can be in one of two states - passive means that the flow has timed
-// out.
-enum FlowState {
-  ACTIVE,
-  PASSIVE
-};
-
 // Each flow is indexed by this value. Note that it does not contain a flow
 // type.
 class FlowKey {
@@ -216,52 +209,6 @@ class TrackedFields {
   friend class FlowIterator;
 };
 
-class Flow;
-
-class TCPRateEstimator {
- public:
-  TCPRateEstimator(const Flow* flow);
-
-  // Gets the Bps estimate as of a given timestamp. If there isn't enough
-  // information to obtain an estimate, false will be returned.
-  bool GetBytesPerSecEstimate(uint64_t timestamp, double* rate) const;
-
-  uint64_t GetVolumeEstimate() const {
-    return last_seq_
-        + static_cast<uint64_t>(overflow_count_
-            * std::numeric_limits<uint32_t>::max()) - first_seq_;
-  }
-
-  void Reset() {
-    period_start_ = 0;
-    period_end_ = std::numeric_limits<uint64_t>::max();
-    period_start_seq_ = 0;
-    period_end_seq_ = std::numeric_limits<uint64_t>::max();
-  }
-
- private:
-  void UpdateFirstLastSeq(uint32_t seq);
-
-  // Updates the period boundaries. Called every time a new packet is
-  // received by the flow.
-  void UpdateEstimate(uint32_t seq, uint32_t payload_size, uint64_t timestamp);
-
-  const Flow* flow_;
-
-  uint64_t period_start_;
-  uint64_t period_start_seq_;
-  uint64_t period_end_;
-  uint64_t period_end_seq_;
-
-  uint32_t first_seq_;
-  uint32_t last_seq_;
-  uint32_t overflow_count_;
-
-  friend class Flow;
-
-  DISALLOW_COPY_AND_ASSIGN(TCPRateEstimator);
-};
-
 // Information about a flow.
 struct FlowInfo {
   uint64_t pkts_seen = 0;
@@ -280,17 +227,10 @@ class Flow {
         first_rx_time_(timestamp),
         key_(key),
         curr_size_bytes_(sizeof(Flow)),
-        state_(FlowState::ACTIVE),
         pkts_seen_(0),
         total_ip_len_seen_(0),
-        total_payload_seen_(0) {
-    if (key.protocol() == IPPROTO_TCP) {
-      tcp_rate_estimator_ = std::make_unique<TCPRateEstimator>(this);
-    }
-  }
-
-  void Deactivate() {
-    state_ = FlowState::PASSIVE;
+        total_payload_seen_(0),
+        tcp_flags_or_(0) {
   }
 
   uint64_t last_rx() const {
@@ -315,10 +255,6 @@ class Flow {
 
   uint8_t tcp_flags_or() const {
     return tcp_flags_or_;
-  }
-
-  const TCPRateEstimator* TCPRateEstimatorOrNull() const {
-    return tcp_rate_estimator_.get();
   }
 
   FlowInfo GetInfo() const {
@@ -397,9 +333,6 @@ class Flow {
   // The current size of this flow.
   size_t curr_size_bytes_;
 
-  // The current state of this flow.
-  FlowState state_;
-
   // Timestamps of when packets were received.
   PackedUintSeq timestamps_;
 
@@ -444,9 +377,6 @@ class Flow {
 
   // Sum of payload (ip_len - headers) of all packets seen by this flow.
   uint64_t total_payload_seen_;
-
-  // The rate estimator. Only used if the flow is TCP.
-  std::unique_ptr<TCPRateEstimator> tcp_rate_estimator_;
 
   // The value of the flag fields of all packets OR-ed together. 0 if this flow
   // is not TCP.

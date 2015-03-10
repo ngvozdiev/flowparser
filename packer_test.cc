@@ -34,12 +34,10 @@ TEST(Packer, AppendByteSizes) {
     // required to hold it plus 3 bits taken from the first byte.
     uint64_t upper_boundary = (1UL << ((byte_count * 8) - 3)) - 1;
 
-    ASSERT_TRUE(seq_.Append(lower_boundary).ok());
+    seq_.Append(lower_boundary);
     ASSERT_EQ(byte_count, seq_.SizeBytes());
 
-    auto result = seq_.Append(upper_boundary);
-
-    ASSERT_TRUE(result.ok())<< result.ToString();
+    seq_.Append(upper_boundary);
     ASSERT_EQ(2 * byte_count, seq_.SizeBytes());
 
     lower_boundary = upper_boundary + 1;
@@ -50,14 +48,14 @@ TEST(Packer, AppendTooLarge) {
   PackedUintSeq seq;
 
   seq.Append(0);
-  ASSERT_FALSE(seq.Append(std::numeric_limits<uint64_t>::max()).ok());
+  ASSERT_ANY_THROW(seq.Append(std::numeric_limits<uint64_t>::max()));
 }
 
 TEST(Packer, AppendNonIncrementing) {
   PackedUintSeq seq;
 
   seq.Append(1000);
-  ASSERT_FALSE(seq.Append(1).ok());
+  ASSERT_ANY_THROW(seq.Append(1));
 }
 
 TEST_F(PackerFixture, Append1KSame) {
@@ -81,7 +79,7 @@ TEST_F(PackerFixture, Append10M) {
     uint64_t val = prev + e();
     prev = val;
 
-    ASSERT_TRUE(seq_.Append(val).ok());
+    seq_.Append(val);
     model.push_back(val);
   }
 
@@ -98,7 +96,7 @@ TEST_F(PackerFixture, Append1MIter) {
     uint64_t val = prev + e();
     prev = val;
 
-    ASSERT_TRUE(seq_.Append(val).ok());
+    seq_.Append(val);
     model.push_back(val);
   }
 

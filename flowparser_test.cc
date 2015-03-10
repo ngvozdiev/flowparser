@@ -107,8 +107,8 @@ TEST_F(FlowParserFixture, FirstLastTimestamps) {
   FlowParser fp(cfg_);
   fp.RunTrace();
 
-  uint64_t first_rx = fp.parser().GetInfo().first_rx;
-  uint64_t last_rx = fp.parser().GetInfo().last_rx;
+  uint64_t first_rx = fp.parser().GetInfoNoLock().first_rx;
+  uint64_t last_rx = fp.parser().GetInfoNoLock().last_rx;
 
   ASSERT_EQ(first_rx, 1369832230607047UL);
   ASSERT_EQ(last_rx, 1369832230644311UL);

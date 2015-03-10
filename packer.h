@@ -37,8 +37,16 @@ class PackedUintSeq {
   // Appends a value at the end of the sequence. This call can fail if the
   // difference between the last value and this value is too large (larger than
   // kEightByteLimit) or if the new value is smaller than the last appended
-  // value (the sequence is not incrementing).
+  // value (the sequence is not incrementing). The second argument is
+  // incremented with the number of additional bytes of memory required to store
+  // the value.
   void Append(uint64_t value, size_t* bytes);
+
+  // Same as above, but does not care about updating total memory consumption.
+  void Append(uint64_t value) {
+    size_t dummy = 0;
+    Append(value, &dummy);
+  }
 
   // Copies out the sequence in a standard vector.
   void Restore(std::vector<uint64_t>* vector) const;
@@ -185,6 +193,11 @@ class RLEField {
 
     strides_.push_back(Stride(value));
     *bytes += sizeof(Stride);
+  }
+
+  void Append(T value) {
+    size_t dummy = 0;
+    Append(value, &dummy);
   }
 
   // The amount of memory (in terms of bytes) used to store the sequence.

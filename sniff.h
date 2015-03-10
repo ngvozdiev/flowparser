@@ -1,4 +1,4 @@
-// Structs from netinet. They reside in their own namespace to avoid confustion.
+// Structs from netinet. They reside in their own namespace to avoid confusion.
 
 #ifndef FLOWPARSER_SNIFF_H
 #define	FLOWPARSER_SNIFF_H

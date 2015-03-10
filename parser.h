@@ -181,7 +181,7 @@ class Parser {
         mem_usage_(0),
         queue_(queue),
         first_rx_(0),
-        last_rx_(std::numeric_limits<uint64_t>::max()),
+        last_rx_(0),
         next_second_start_(0),
         total_pkts_seen_(0),
         total_tcp_syn_or_fin_pkts_seen_(0),
@@ -389,6 +389,10 @@ class Parser {
                    bool tcp) {
     if (first_rx_ == 0) {
       first_rx_ = timestamp;
+    }
+
+    if (timestamp < last_rx_) {
+      throw std::logic_error("Non-incrementing timestamps");
     }
 
     last_rx_ = timestamp;
