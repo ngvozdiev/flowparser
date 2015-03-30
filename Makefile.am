@@ -1,10 +1,12 @@
 AM_CPPFLAGS = -g -pthread -std=c++11 -pedantic-errors -Werror -Winit-self -Wold-style-cast -Woverloaded-virtual -Wuninitialized -Wall -Wextra -O2
 
+AM_LDFLAGS = -pthread
+
 lib_LTLIBRARIES = libflowparser.la
 libflowparser_la_SOURCES = common.cc common.h flows.cc flows.h packer.cc packer.h parser.cc parser.h flowparser.cc ptr_queue.h
 
 libflowparser_la_LDFLAGS = -version-info 0:2:0
-include_HEADERS = flowparser.h
+pkginclude_HEADERS = flowparser.h flows.h common.h packer.h parser.h sniff.h ptr_queue.h
 
 # Unit tests
 noinst_LIBRARIES = libgtest.a
